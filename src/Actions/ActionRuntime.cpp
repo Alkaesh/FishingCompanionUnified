@@ -189,6 +189,8 @@ std::atomic_bool g_auto_reel_enabled{false};
 std::atomic_ullong g_auto_reel_ticks{0};
 std::chrono::steady_clock::time_point g_next_auto_reel_tick{};
 std::chrono::steady_clock::time_point g_next_auto_result_choice{};
+WPARAM g_posted_mouse_buttons = 0;
+WPARAM g_posted_key_modifiers = 0;
 bool g_has_marked_spot = false;
 Vector3 g_marked_spot{};
 std::vector<void*> g_fish_instances;
@@ -227,6 +229,8 @@ constexpr size_t kMaxRecentEvents = 80;
 const char* command_name(fc::actions::Command command);
 ProbeSet capture_probe();
 void perform_continue_fishing(const ActionSet& actions);
+HWND find_process_window();
+bool is_process_window_foreground();
 
 std::wstring process_directory()
 {
@@ -2977,11 +2981,36 @@ bool hold_input_action(void* action, DWORD hold_ms)
 
 bool send_key_state(WORD vk, bool pressed)
 {
-    INPUT input{};
-    input.type = INPUT_KEYBOARD;
-    input.ki.wVk = vk;
-    input.ki.dwFlags = pressed ? 0 : KEYEVENTF_KEYUP;
-    return SendInput(1, &input, sizeof(INPUT)) == 1;
+    if (is_process_window_foreground()) {
+        INPUT input{};
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = vk;
+        input.ki.dwFlags = pressed ? 0 : KEYEVENTF_KEYUP;
+        return SendInput(1, &input, sizeof(INPUT)) == 1;
+    }
+
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    LPARAM lparam = 1 | (static_cast<LPARAM>(scan) << 16);
+    if (!pressed)
+        lparam |= (1LL << 30) | (1LL << 31);
+
+    if (vk == VK_SHIFT) {
+        if (pressed)
+            g_posted_key_modifiers |= MK_SHIFT;
+        else
+            g_posted_key_modifiers &= ~MK_SHIFT;
+    } else if (vk == VK_CONTROL) {
+        if (pressed)
+            g_posted_key_modifiers |= MK_CONTROL;
+        else
+            g_posted_key_modifiers &= ~MK_CONTROL;
+    }
+
+    return PostMessageW(hwnd, pressed ? WM_KEYDOWN : WM_KEYUP, vk, lparam) != FALSE;
 }
 
 struct ProcessWindowSearch {
@@ -3009,19 +3038,22 @@ HWND find_process_window()
     return search.hwnd;
 }
 
-bool focus_process_window()
+bool is_process_window_foreground()
 {
-    const HWND hwnd = find_process_window();
-    if (!hwnd)
+    const HWND foreground = GetForegroundWindow();
+    if (!foreground)
         return false;
 
-    ShowWindow(hwnd, SW_RESTORE);
-    BringWindowToTop(hwnd);
-    return SetForegroundWindow(hwnd) != FALSE;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(foreground, &pid);
+    return pid == GetCurrentProcessId();
 }
 
 bool send_scan_key_state(WORD vk, bool pressed)
 {
+    if (!is_process_window_foreground())
+        return send_key_state(vk, pressed);
+
     const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
     if (!scan)
         return send_key_state(vk, pressed);
@@ -3063,10 +3095,47 @@ bool tap_key_combo(WORD modifier, WORD key, DWORD hold_ms = 55)
 
 bool send_mouse_event(DWORD flags)
 {
-    INPUT input{};
-    input.type = INPUT_MOUSE;
-    input.mi.dwFlags = flags;
-    return SendInput(1, &input, sizeof(INPUT)) == 1;
+    if (is_process_window_foreground()) {
+        INPUT input{};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = flags;
+        return SendInput(1, &input, sizeof(INPUT)) == 1;
+    }
+
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    RECT rect{};
+    if (!GetClientRect(hwnd, &rect))
+        return false;
+
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0)
+        return false;
+
+    const LPARAM point = MAKELPARAM(width / 2, height / 2);
+    UINT message = 0;
+    if (flags & MOUSEEVENTF_LEFTDOWN) {
+        g_posted_mouse_buttons |= MK_LBUTTON;
+        message = WM_LBUTTONDOWN;
+    } else if (flags & MOUSEEVENTF_LEFTUP) {
+        g_posted_mouse_buttons &= ~MK_LBUTTON;
+        message = WM_LBUTTONUP;
+    } else if (flags & MOUSEEVENTF_RIGHTDOWN) {
+        g_posted_mouse_buttons |= MK_RBUTTON;
+        message = WM_RBUTTONDOWN;
+    } else if (flags & MOUSEEVENTF_RIGHTUP) {
+        g_posted_mouse_buttons &= ~MK_RBUTTON;
+        message = WM_RBUTTONUP;
+    } else {
+        return false;
+    }
+
+    const WPARAM state = g_posted_mouse_buttons | g_posted_key_modifiers;
+    PostMessageW(hwnd, WM_MOUSEMOVE, state, point);
+    return PostMessageW(hwnd, message, state, point) != FALSE;
 }
 
 bool click_window_fraction(double x_fraction, double y_fraction)
@@ -3076,26 +3145,22 @@ bool click_window_fraction(double x_fraction, double y_fraction)
         return false;
 
     RECT rect{};
-    if (!GetWindowRect(hwnd, &rect))
+    if (!GetClientRect(hwnd, &rect))
         return false;
-
-    focus_process_window();
-    sleep_interruptible(80);
 
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;
     if (width <= 0 || height <= 0)
         return false;
 
-    const int x = rect.left + static_cast<int>(std::lround(width * x_fraction));
-    const int y = rect.top + static_cast<int>(std::lround(height * y_fraction));
-    if (!SetCursorPos(x, y))
-        return false;
-
+    const int x = static_cast<int>(std::lround(width * x_fraction));
+    const int y = static_cast<int>(std::lround(height * y_fraction));
+    const LPARAM point = MAKELPARAM(x, y);
+    PostMessageW(hwnd, WM_MOUSEMOVE, 0, point);
     sleep_interruptible(40);
-    const bool down = send_mouse_event(MOUSEEVENTF_LEFTDOWN);
+    const bool down = PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, point) != FALSE;
     sleep_interruptible(80);
-    const bool up = send_mouse_event(MOUSEEVENTF_LEFTUP);
+    const bool up = PostMessageW(hwnd, WM_LBUTTONUP, 0, point) != FALSE;
     return down && up;
 }
 
@@ -3447,8 +3512,7 @@ bool perform_catch_result_choice(
 
     fc::Overlay::Get().SetMenuVisible(false);
     sleep_interruptible(180);
-    const bool focused = focus_process_window();
-    sleep_interruptible(120);
+    const bool targeted = find_process_window() != nullptr;
     bool ok = tap_scan_key(vk, 95);
     if (!ok)
         ok = tap_key(vk, 95);
@@ -3498,8 +3562,8 @@ bool perform_catch_result_choice(
     log_coordinate_snapshot(command_name(command), after);
 
     std::ostringstream observation;
-    observation << "sent " << label
-        << "; focused=" << (focused ? "true" : "false")
+    observation << "sent targeted " << label
+        << "; target_window=" << (targeted ? "true" : "false")
         << "; clicked=" << (clicked ? "true" : "false")
         << "; posted=" << (posted ? "true" : "false")
         << "; fish=" << before.fish_count << "->" << after.fish_count
@@ -3608,9 +3672,18 @@ void maybe_auto_reel(const ActionSet& actions)
     if (!fish_fight && (tick % 12) == 0)
         prepare_reel_for_retrieve();
 
-    const bool ok = fish_fight
-        ? send_fish_fight_hold(active_fishing ? 850 : 520)
-        : send_left_mouse_hold(active_fishing ? 700 : 420, true);
+    const DWORD hold_ms = fish_fight ? (active_fishing ? 850 : 520) : (active_fishing ? 700 : 420);
+    void* reel_action = fish_fight || active_fishing ? actions.manual_roll_boost : actions.manual_roll;
+    if (!reel_action)
+        reel_action = actions.manual_roll;
+    const bool action_ok = hold_input_action(reel_action, hold_ms);
+    bool mouse_ok = false;
+    if (is_process_window_foreground()) {
+        mouse_ok = fish_fight
+            ? send_fish_fight_hold(hold_ms)
+            : send_left_mouse_hold(hold_ms, true);
+    }
+    const bool ok = action_ok || mouse_ok;
     const unsigned long long new_tick = ++g_auto_reel_ticks;
 
     if ((new_tick % 20) == 0) {
@@ -3629,6 +3702,7 @@ void maybe_auto_reel(const ActionSet& actions)
 }
 
 bool perform_real_retrieve(
+    const ActionSet& actions,
     fc::actions::Command command,
     DWORD hold_ms,
     bool shift_boost,
@@ -3641,8 +3715,16 @@ bool perform_real_retrieve(
     if (!fish_fight && prepare_reel)
         ok = prepare_reel_for_retrieve() && ok;
 
-    ok = (fish_fight ? send_fish_fight_hold(hold_ms)
-                     : send_left_mouse_hold(hold_ms, shift_boost)) && ok;
+    void* reel_action = fish_fight || shift_boost ? actions.manual_roll_boost : actions.manual_roll;
+    if (!reel_action)
+        reel_action = actions.manual_roll;
+    bool input_action_hold = hold_input_action(reel_action, hold_ms);
+    bool mouse_hold = false;
+    if (is_process_window_foreground()) {
+        mouse_hold = fish_fight ? send_fish_fight_hold(hold_ms)
+                                : send_left_mouse_hold(hold_ms, shift_boost);
+    }
+    ok = (input_action_hold || mouse_hold) && ok;
 
     sleep_interruptible(650);
     const SensorState after = refresh_sensor_status();
@@ -3657,8 +3739,9 @@ bool perform_real_retrieve(
          (fish_fight && reel_changed));
 
     std::ostringstream observation;
-    observation << "real "
-        << (fish_fight ? "RMB+LMB fish-fight hold " : (shift_boost ? "Shift+LMB hold " : "LMB hold "))
+    observation << "targeted "
+        << (input_action_hold ? "InputAction " : (mouse_hold ? "foreground game mouse " : "no foreground mouse "))
+        << (fish_fight ? "fish-fight hold " : (shift_boost ? "boost roll hold " : "roll hold "))
         << hold_ms << "ms"
         << "; reel_delta=" << std::fixed << std::setprecision(3) << reel_delta
         << " distance_delta=" << distance_delta
@@ -3740,6 +3823,7 @@ bool perform_auto_cast(const ActionSet& actions)
     if (std::fabs(before.reel_value) > 0.5f || before.fisher_to_lure > 2.0f) {
         set_busy(fc::actions::Command::ManualRollBoost);
         perform_real_retrieve(
+            actions,
             fc::actions::Command::ManualRollBoost,
             8500,
             true,
@@ -3766,13 +3850,15 @@ bool perform_auto_cast(const ActionSet& actions)
 
     set_busy(fc::actions::Command::StartHooking);
     sleep_interruptible(250);
-    const bool cast_hold = send_left_mouse_hold(1600);
+    const bool game_foreground = is_process_window_foreground();
+    const bool cast_hold = game_foreground && send_left_mouse_hold(1600);
     set_command_result_observed(
         fc::actions::Command::StartHooking,
         cast_hold,
         false,
-        cast_hold ? "sent real left mouse hold for 1600ms; waiting for lure movement"
-                  : "real left mouse hold failed");
+        cast_hold ? "sent foreground-guarded game mouse hold for 1600ms; waiting for lure movement"
+                  : (game_foreground ? "foreground-guarded game mouse hold failed"
+                                     : "game is not foreground; skipped system mouse hold"));
     ok = ok && cast_hold;
 
     sleep_interruptible(1800);
@@ -4057,7 +4143,7 @@ DWORD WINAPI worker_thread(void*)
 
         if (command == fc::actions::Command::ManualRoll) {
             set_busy(command);
-            perform_real_retrieve(command, 3200, false, false, false);
+            perform_real_retrieve(g_actions, command, 3200, false, false, false);
             continue;
         }
 
@@ -4065,6 +4151,7 @@ DWORD WINAPI worker_thread(void*)
             set_busy(command);
             const SensorState state = refresh_sensor_status();
             perform_real_retrieve(
+                g_actions,
                 command,
                 6500,
                 true,
