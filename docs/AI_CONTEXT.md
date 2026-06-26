@@ -32,9 +32,12 @@ Not allowed:
 
 - `src/SDK/FCSDK.h`: public C ABI and C++ wrappers.
 - `src/SDK/FCSDK_UI.h`: style-compatible UI helpers.
-- `src/SDK/ModuleLoader.*`: runtime module loading.
-- `src/GUI/Menu.cpp`: main shell, header, left navigation, content area.
+- `src/SDK/ModuleLoader.*`: runtime module loading and host-side loader diagnostics.
+- `src/Actions/ActionRuntime.*`: action queue, status model, file logging, and recent UI event buffer.
+- `src/GUI/Menu.cpp`: Byster-branded shell, top navigation, compact toolbar, content panel.
 - `src/GUI/Theme.cpp`: visual system and ImGui style.
+- `src/GUI/Tabs/ActionsTab.cpp`: action buttons, runtime status, and recent runtime event log.
+- `src/GUI/Tabs/SdkTab.cpp`: SDK status, loaded module table, and loader event log.
 - `src/Core/Overlay.cpp`: DX11 lifecycle, cursor handling, module loading.
 - `docs/QUICKSTART.md`: how to write a module.
 - `examples/ExampleMod.cpp`: sample module source.
@@ -50,10 +53,17 @@ Not allowed:
 - Keep module ImGui headers/version aligned with `FCSDK_GetImGuiVersion()`.
 - Keep module render callbacks fast.
 - Use `FCSDK_UI.h` helpers for visual consistency.
+- Keep built-in host UI labels in short English ASCII until a dedicated localization layer exists.
+- Default host tabs should expose implemented behavior only; do not register placeholder tabs or controls without backing runtime.
 - Build and verify with:
 
 ```powershell
-& 'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe' --build build --config Release
+cmake --preset msvc-x64
+cmake --build --preset release
+
+# On Visual Studio 18 / 2026 machines:
+cmake --preset msvc-x64-vs18
+cmake --build --preset release-vs18
 ```
 
 ## Current SDK Version

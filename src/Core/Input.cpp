@@ -1,5 +1,5 @@
 // ============================================================================
-//  Input.cpp — обработка горячих клавиш модуля.
+//  Input.cpp - overlay hotkey handling.
 // ============================================================================
 
 #include "Input.h"
@@ -9,13 +9,13 @@ namespace fc {
 
 int& Input::ToggleKey()
 {
-    static int key = VK_INSERT; // Клавиша вызова меню по умолчанию.
+    static int key = VK_INSERT; // Default menu toggle key.
     return key;
 }
 
 int& Input::UnloadKey()
 {
-    static int key = VK_END;    // Клавиша выгрузки модуля.
+    static int key = VK_END;    // Default module unload key.
     return key;
 }
 
@@ -44,8 +44,6 @@ bool Input::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         return true;
     }
 
-    // TODO: здесь же можно опрашивать пользовательские хоткеи из Keybinder,
-    //       чтобы скрывать/показывать отдельные элементы HUD.
     return false;
 }
 

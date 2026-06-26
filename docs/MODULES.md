@@ -9,7 +9,7 @@ This project is now split into build modules and ownership areas. Use this file 
 | `fc_entry` | `src/dllmain.cpp` | DLL attach/detach and main worker thread | `DllMain`, `MainThread` |
 | `fc_core` | `src/Core` | DX11 overlay hooks, input routing, shutdown lifecycle | `fc::Overlay`, `fc::Input` |
 | `fc_actions` | `src/Actions` | Runtime commands, action queue, diagnostics, sensor snapshots | `fc::actions::Start/Stop/Queue/GetStatus` |
-| `fc_features` | `src/Features` | UI-independent app features such as key binding and counters | `fc::KeyBinder`, `fc::Statistics` |
+| `fc_features` | `src/Features` | UI-independent app features such as key binding | `fc::KeyBinder` |
 | `fc_gui` | `src/GUI` | Menu shell, built-in tabs, visual layout | `fc::Menu`, `fc::ITab` |
 | `fc_sdk` | `src/SDK` | External module ABI and lifecycle | `FCSDK_*`, `fc::sdk::ModuleLoader` |
 | `fc_third_party` | `third_party/imgui`, `third_party/minhook` | Vendored UI/hook dependencies | Do not edit unless upgrading vendor code |
@@ -34,7 +34,7 @@ This project is now split into build modules and ownership areas. Use this file 
 
 2. UI and workflow track
    - Main files: `src/GUI`, `src/Features`.
-   - Good tasks: tabs, status views, timers, key binding UX, log viewers.
+   - Good tasks: tabs, status views, key binding UX, log viewers.
    - Required proof: build plus screenshot only when layout changed.
 
 3. SDK/module ecosystem track

@@ -1,5 +1,5 @@
 // ============================================================================
-//  DashboardTab — «📊 Статистика»: вывод игровых показателей + переключатели HUD.
+//  DashboardTab - live overview for runtime, SDK, and hotkeys.
 // ============================================================================
 
 #pragma once
@@ -11,7 +11,7 @@ namespace fc {
 class DashboardTab : public ITab
 {
 public:
-    const char* Title() const override { return "Статистика"; }
+    const char* Title() const override { return "Dashboard"; }
     void Render() override;
 };
 

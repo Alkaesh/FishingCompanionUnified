@@ -21,6 +21,18 @@
       "cacheVariables": {
         "FC_BUILD_IL2CPP_TOOLING": "ON"
       }
+    },
+    {
+      "name": "msvc-x64-vs18",
+      "displayName": "MSVC x64 overlay (Visual Studio 18)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/cmake/vs18-x64",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
+        "FC_BUILD_OVERLAY": "ON",
+        "FC_BUILD_IL2CPP_TOOLING": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -32,6 +44,11 @@
     {
       "name": "release-tooling",
       "configurePreset": "msvc-x64-tooling",
+      "configuration": "Release"
+    },
+    {
+      "name": "release-vs18",
+      "configurePreset": "msvc-x64-vs18",
       "configuration": "Release"
     }
   ]

@@ -31,6 +31,13 @@ cmake --build --preset release
 .\tools\run_action_test.ps1 -Summary
 ```
 
+If the machine only has Visual Studio 18 / 2026, use:
+
+```powershell
+cmake --preset msvc-x64-vs18
+cmake --build --preset release-vs18
+```
+
 Use screenshots only as backup evidence. Prefer structured logs in `test_logs/` for fast repeat checks.
 
 ## Generated Files

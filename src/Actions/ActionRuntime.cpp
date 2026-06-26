@@ -175,8 +175,10 @@ struct FishPositionRead {
 std::atomic_bool g_running{false};
 HANDLE g_thread = nullptr;
 std::mutex g_mutex;
+std::mutex g_recent_events_mutex;
 std::condition_variable g_cv;
 std::deque<fc::actions::Command> g_queue;
+std::deque<std::string> g_recent_events;
 fc::actions::Status g_status;
 ActionSet g_actions;
 ProbeSet g_probe;
@@ -219,6 +221,7 @@ constexpr uintptr_t k_fish_position_alt_child_field = 0x50;
 constexpr uintptr_t k_fish_position_child_world_field = 0xC0;
 constexpr uintptr_t k_fish_position_legacy_primary_field = 0xD8;
 constexpr uintptr_t k_fish_position_legacy_alternate_field = 0xCC;
+constexpr size_t kMaxRecentEvents = 80;
 
 const char* command_name(fc::actions::Command command);
 ProbeSet capture_probe();
@@ -232,8 +235,33 @@ std::wstring process_directory()
     return pos == std::wstring::npos ? L"." : value.substr(0, pos);
 }
 
+void remember_event(const std::string& text)
+{
+    if (text.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(g_recent_events_mutex);
+    g_recent_events.push_back(text);
+    while (g_recent_events.size() > kMaxRecentEvents)
+        g_recent_events.pop_front();
+}
+
+void clear_recent_events()
+{
+    std::lock_guard<std::mutex> lock(g_recent_events_mutex);
+    g_recent_events.clear();
+}
+
+std::vector<std::string> recent_events_snapshot()
+{
+    std::lock_guard<std::mutex> lock(g_recent_events_mutex);
+    return std::vector<std::string>(g_recent_events.begin(), g_recent_events.end());
+}
+
 void log_line(const std::string& text)
 {
+    remember_event(text);
+
     const std::filesystem::path path =
         std::filesystem::path(process_directory()) / L"FishingCompanion_actions.log";
     std::ofstream out(path, std::ios::out | std::ios::app);
@@ -403,6 +431,8 @@ void process_command_file()
         g_status.auto_reel_enabled = g_auto_reel_enabled;
         g_status.auto_reel_ticks = g_auto_reel_ticks;
     }
+
+    remember_event(std::string("queued from file: ") + command_name(*command));
 }
 
 void set_message(const std::string& message)
@@ -3785,6 +3815,9 @@ bool Start()
     if (!g_running.compare_exchange_strong(expected, true))
         return true;
 
+    clear_recent_events();
+    remember_event("starting action runtime");
+
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_status = {};
@@ -3800,6 +3833,7 @@ bool Start()
     if (!g_thread) {
         g_running = false;
         set_message("failed to start action runtime");
+        remember_event("failed to start action runtime");
         return false;
     }
 
@@ -3834,33 +3868,46 @@ void Stop()
 
 void Queue(Command command)
 {
+    bool queued = false;
+    std::string event;
+
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         if (!g_running.load()) {
             g_status.message = "action runtime is not running";
-            return;
+            event = g_status.message;
+        } else {
+            g_queue.push_back(command);
+            g_status.queued = static_cast<unsigned int>(g_queue.size());
+            g_status.message = std::string("queued: ") + command_name(command);
+            g_status.auto_reel_enabled = g_auto_reel_enabled;
+            g_status.auto_reel_ticks = g_auto_reel_ticks;
+            queued = true;
+            event = g_status.message;
         }
-
-        g_queue.push_back(command);
-        g_status.queued = static_cast<unsigned int>(g_queue.size());
-        g_status.message = std::string("queued: ") + command_name(command);
-        g_status.auto_reel_enabled = g_auto_reel_enabled;
-        g_status.auto_reel_ticks = g_auto_reel_ticks;
     }
 
-    g_cv.notify_one();
+    remember_event(event);
+
+    if (queued)
+        g_cv.notify_one();
 }
 
 Status GetStatus()
 {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    Status copy = g_status;
-    copy.running = g_running.load();
-    copy.queued = static_cast<unsigned int>(g_queue.size());
-    copy.diagnostics_enabled = g_diagnostics_enabled;
-    copy.diagnostic_snapshots = g_diagnostic_snapshots;
-    copy.auto_reel_enabled = g_auto_reel_enabled;
-    copy.auto_reel_ticks = g_auto_reel_ticks;
+    Status copy;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        copy = g_status;
+        copy.running = g_running.load();
+        copy.queued = static_cast<unsigned int>(g_queue.size());
+        copy.diagnostics_enabled = g_diagnostics_enabled;
+        copy.diagnostic_snapshots = g_diagnostic_snapshots;
+        copy.auto_reel_enabled = g_auto_reel_enabled;
+        copy.auto_reel_ticks = g_auto_reel_ticks;
+    }
+
+    copy.recent_events = recent_events_snapshot();
     return copy;
 }
 

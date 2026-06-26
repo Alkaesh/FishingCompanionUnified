@@ -17,6 +17,8 @@ cmake --preset msvc-x64
 cmake --build --preset release
 ```
 
+Visual Studio 18 / 2026 machines can use `msvc-x64-vs18` and `release-vs18`.
+
 Основной результат:
 
 ```text

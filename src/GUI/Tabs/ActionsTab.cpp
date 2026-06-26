@@ -16,6 +16,37 @@ ImVec4 RGBA(unsigned int hex)
         ((hex)       & 0xFF) / 255.0f);
 }
 
+bool BeginCard(const char* id, const ImVec2& size)
+{
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, RGBA(0x121416F5));
+    ImGui::PushStyleColor(ImGuiCol_Border, RGBA(0x2B2C31FF));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 3.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(13.0f, 12.0f));
+
+#if IMGUI_VERSION_NUM >= 19000
+    return ImGui::BeginChild(
+        id,
+        size,
+        ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+#else
+    return ImGui::BeginChild(
+        id,
+        size,
+        true,
+        ImGuiWindowFlags_AlwaysUseWindowPadding |
+            ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoScrollWithMouse);
+#endif
+}
+
+void EndCard()
+{
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
+}
+
 bool ActionButton(const char* label, fc::actions::Command command, const ImVec2& size)
 {
     if (!ImGui::Button(label, size))
@@ -35,27 +66,39 @@ namespace fc {
 void ActionsTab::Render()
 {
     const actions::Status status = actions::GetStatus();
-    const ImVec4 state_color = status.ready ? RGBA(0x31D3C6FF) : RGBA(0xFFCF66FF);
+    const ImVec4 state_color = status.ready ? RGBA(0xFFB800FF) : RGBA(0xFFCF66FF);
+    const char* runtime_state = status.busy ? "busy" : (status.ready ? "ready" : "waiting");
 
     ImGui::SeparatorText("Runtime");
-    ImGui::TextColored(state_color, "%s", status.ready ? "ready" : "waiting");
-    ImGui::SameLine();
-    ImGui::TextColored(RGBA(0x7F91A0FF), "queued: %u", status.queued);
 
-    if (!status.message.empty())
-        ImGui::TextWrapped("%s", status.message.c_str());
+    bool refresh_requested = false;
+    if (BeginCard("##runtime_status", ImVec2(0.0f, 156.0f)))
+    {
+        ImGui::TextColored(state_color, "%s", runtime_state);
+        ImGui::SameLine();
+        ImGui::TextColored(RGBA(0x7F91A0FF), "queued: %u", status.queued);
+        const float refreshX = ImGui::GetWindowContentRegionMax().x - 112.0f;
+        if (refreshX > ImGui::GetCursorPosX() + 8.0f)
+            ImGui::SameLine(refreshX);
+        else
+            ImGui::SameLine();
+        refresh_requested = ActionButton("Refresh", actions::Command::Refresh, ImVec2(112.0f, 30.0f));
 
-    if (!status.last_command.empty())
-        ImGui::TextColored(
-            status.last_effect_confirmed ? RGBA(0x31D3C6FF) : RGBA(0xFFCF66FF),
-            "last: %s / %s",
-            status.last_command.c_str(),
-            status.last_result.c_str());
-    if (!status.last_observation.empty())
-        ImGui::TextWrapped("observed: %s", status.last_observation.c_str());
+        if (!status.message.empty())
+            ImGui::TextWrapped("%s", status.message.c_str());
 
-    ImGui::Spacing();
-    if (ActionButton("Refresh", actions::Command::Refresh, ImVec2(118.0f, 32.0f)))
+        if (!status.last_command.empty())
+            ImGui::TextColored(
+                status.last_effect_confirmed ? RGBA(0xFFB800FF) : RGBA(0xFFCF66FF),
+                "last: %s / %s",
+                status.last_command.c_str(),
+                status.last_result.c_str());
+        if (!status.last_observation.empty())
+            ImGui::TextWrapped("observed: %s", status.last_observation.c_str());
+    }
+    EndCard();
+
+    if (refresh_requested)
         return;
 
     ImGui::Spacing();
@@ -102,9 +145,9 @@ void ActionsTab::Render()
     ActionButton("Hand HotSwap", actions::Command::HandItemHotSwap, button_size);
 
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x1C5A62FF));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x267B82FF));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0x31D3C6FF));
+    ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x3A2B10FF));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x5A3D0BFF));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0xFFB800FF));
     ActionButton("Auto Cast", actions::Command::AutoCast, button_size);
     ImGui::SameLine(0.0f, gap);
     ActionButton("Auto Catch", actions::Command::AutoCatch, button_size);
@@ -126,7 +169,7 @@ void ActionsTab::Render()
     ImGui::Spacing();
     ImGui::SeparatorText("Reel");
     ImGui::TextColored(
-        status.auto_reel_enabled ? RGBA(0x31D3C6FF) : RGBA(0x7F91A0FF),
+        status.auto_reel_enabled ? RGBA(0xFFB800FF) : RGBA(0x7F91A0FF),
         "auto reel: %s / ticks: %llu",
         status.auto_reel_enabled ? "on" : "off",
         status.auto_reel_ticks);
@@ -175,11 +218,11 @@ void ActionsTab::Render()
     ImGui::Spacing();
     ImGui::SeparatorText("Diagnostics");
     ImGui::TextColored(
-        status.last_effect_confirmed ? RGBA(0x31D3C6FF) : RGBA(0xFFCF66FF),
+        status.last_effect_confirmed ? RGBA(0xFFB800FF) : RGBA(0xFFCF66FF),
         "Observed in game: %s",
         status.last_effect_confirmed ? "confirmed" : "not confirmed");
     ImGui::TextColored(
-        status.diagnostics_enabled ? RGBA(0x31D3C6FF) : RGBA(0x7F91A0FF),
+        status.diagnostics_enabled ? RGBA(0xFFB800FF) : RGBA(0x7F91A0FF),
         "log: %s / snapshots: %llu",
         status.diagnostics_enabled ? "on" : "off",
         status.diagnostic_snapshots);
@@ -195,6 +238,31 @@ void ActionsTab::Render()
         status.diagnostics_enabled ? "Stop Log" : "Start Log",
         actions::Command::ToggleDiagnostics,
         button_size);
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Event Log");
+    if (BeginCard("##action_event_log", ImVec2(0.0f, 172.0f)))
+    {
+        if (status.recent_events.empty())
+        {
+            ImGui::TextColored(RGBA(0x7F91A0FF), "No runtime events yet.");
+        }
+        else
+        {
+            if (ImGui::BeginChild("##action_event_log_scroll", ImVec2(0.0f, 0.0f), false))
+            {
+                for (size_t i = status.recent_events.size(); i > 0; --i)
+                {
+                    const std::string& event = status.recent_events[i - 1];
+                    ImGui::TextColored(RGBA(0x6F8190FF), "%02llu", static_cast<unsigned long long>(i));
+                    ImGui::SameLine();
+                    ImGui::TextWrapped("%s", event.c_str());
+                }
+            }
+            ImGui::EndChild();
+        }
+    }
+    EndCard();
 }
 
 } // namespace fc

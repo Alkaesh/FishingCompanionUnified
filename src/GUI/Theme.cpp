@@ -1,5 +1,5 @@
 // ============================================================================
-//  Theme.cpp - polished dark graphite skin for the ImGui overlay.
+//  Theme.cpp - compact dark Byster-style skin for the ImGui overlay.
 // ============================================================================
 
 #include "Theme.h"
@@ -70,18 +70,18 @@ void Theme::Apply()
     const ImVec4 bgDeep     = RGBA(0x0A0F16FF);
     const ImVec4 bgWindow   = RGBA(0x0D131DFF);
     const ImVec4 bgPanel    = RGBA(0x111923FF);
-    const ImVec4 bgPanelHi  = RGBA(0x172131FF);
-    const ImVec4 bgInput    = RGBA(0x182333FF);
-    const ImVec4 bgInputHi  = RGBA(0x223449FF);
-    const ImVec4 cyan       = RGBA(0x31D3C6FF);
-    const ImVec4 cyanHi     = RGBA(0x7FF4EAFF);
-    const ImVec4 cyanDim    = RGBA(0x188A88FF);
-    const ImVec4 amber      = RGBA(0xFFCF66FF);
+    const ImVec4 bgPanelHi  = RGBA(0x1B1C20FF);
+    const ImVec4 bgInput    = RGBA(0x101114FF);
+    const ImVec4 bgInputHi  = RGBA(0x23201AFF);
+    const ImVec4 cyan       = RGBA(0xFFB800FF);
+    const ImVec4 cyanHi     = RGBA(0xFFD56BFF);
+    const ImVec4 cyanDim    = RGBA(0xA66F00FF);
+    const ImVec4 amber      = RGBA(0xF2C25AFF);
     const ImVec4 coral      = RGBA(0xFF7A66FF);
     const ImVec4 textMain   = RGBA(0xE7F1F7FF);
     const ImVec4 textSoft   = RGBA(0xA9B7C3FF);
     const ImVec4 textDim    = RGBA(0x6F8190FF);
-    const ImVec4 border     = RGBA(0x2F3D4EFF);
+    const ImVec4 border     = RGBA(0x2B2C31FF);
 
     ImVec4* c = style.Colors;
     c[ImGuiCol_Text]                  = textMain;
@@ -94,14 +94,14 @@ void Theme::Apply()
 
     c[ImGuiCol_FrameBg]               = bgInput;
     c[ImGuiCol_FrameBgHovered]        = bgInputHi;
-    c[ImGuiCol_FrameBgActive]         = RGBA(0x2B465FFF);
+    c[ImGuiCol_FrameBgActive]         = RGBA(0x3A2B10FF);
 
     c[ImGuiCol_TitleBg]               = bgDeep;
     c[ImGuiCol_TitleBgActive]         = bgPanel;
     c[ImGuiCol_TitleBgCollapsed]      = bgDeep;
 
-    c[ImGuiCol_Button]                = RGBA(0x182333FF);
-    c[ImGuiCol_ButtonHovered]         = RGBA(0x22384BFF);
+    c[ImGuiCol_Button]                = RGBA(0x17181BFF);
+    c[ImGuiCol_ButtonHovered]         = RGBA(0x2B2416FF);
     c[ImGuiCol_ButtonActive]          = cyanDim;
 
     c[ImGuiCol_CheckMark]             = cyanHi;
@@ -109,31 +109,31 @@ void Theme::Apply()
     c[ImGuiCol_SliderGrabActive]      = amber;
 
     c[ImGuiCol_Header]                = bgPanelHi;
-    c[ImGuiCol_HeaderHovered]         = RGBA(0x22384BFF);
-    c[ImGuiCol_HeaderActive]          = RGBA(0x244E5AFF);
+    c[ImGuiCol_HeaderHovered]         = RGBA(0x2B2416FF);
+    c[ImGuiCol_HeaderActive]          = RGBA(0x3A2B10FF);
 
-    c[ImGuiCol_Separator]             = RGBA(0x293848FF);
+    c[ImGuiCol_Separator]             = RGBA(0x2D2A22FF);
     c[ImGuiCol_SeparatorHovered]      = cyanDim;
     c[ImGuiCol_SeparatorActive]       = cyan;
-    c[ImGuiCol_ResizeGrip]            = RGBA(0x31D3C633);
-    c[ImGuiCol_ResizeGripHovered]     = RGBA(0x31D3C688);
+    c[ImGuiCol_ResizeGrip]            = RGBA(0xFFB80033);
+    c[ImGuiCol_ResizeGripHovered]     = RGBA(0xFFB80088);
     c[ImGuiCol_ResizeGripActive]      = cyan;
 
     c[ImGuiCol_Tab]                   = bgPanel;
-    c[ImGuiCol_TabHovered]            = RGBA(0x22384BFF);
-    c[ImGuiCol_TabActive]             = RGBA(0x1A3443FF);
+    c[ImGuiCol_TabHovered]            = RGBA(0x2B2416FF);
+    c[ImGuiCol_TabActive]             = RGBA(0x332713FF);
     c[ImGuiCol_TabUnfocused]          = bgPanel;
-    c[ImGuiCol_TabUnfocusedActive]    = RGBA(0x172C39FF);
+    c[ImGuiCol_TabUnfocusedActive]    = RGBA(0x2A2113FF);
 
-    c[ImGuiCol_TableHeaderBg]         = RGBA(0x172131FF);
-    c[ImGuiCol_TableBorderStrong]     = RGBA(0x35475AFF);
-    c[ImGuiCol_TableBorderLight]      = RGBA(0x243342FF);
+    c[ImGuiCol_TableHeaderBg]         = RGBA(0x1B1C20FF);
+    c[ImGuiCol_TableBorderStrong]     = RGBA(0x3A3324FF);
+    c[ImGuiCol_TableBorderLight]      = RGBA(0x2B2C31FF);
     c[ImGuiCol_TableRowBg]            = RGBA(0x11192300);
     c[ImGuiCol_TableRowBgAlt]         = RGBA(0xFFFFFF05);
 
     c[ImGuiCol_ScrollbarBg]           = RGBA(0x0B1018FF);
-    c[ImGuiCol_ScrollbarGrab]         = RGBA(0x243342FF);
-    c[ImGuiCol_ScrollbarGrabHovered]  = RGBA(0x31506AFF);
+    c[ImGuiCol_ScrollbarGrab]         = RGBA(0x2B2C31FF);
+    c[ImGuiCol_ScrollbarGrabHovered]  = RGBA(0x4A3515FF);
     c[ImGuiCol_ScrollbarGrabActive]   = cyanDim;
 
     c[ImGuiCol_PlotLines]             = cyan;
@@ -141,9 +141,9 @@ void Theme::Apply()
     c[ImGuiCol_PlotHistogram]         = amber;
     c[ImGuiCol_PlotHistogramHovered]  = coral;
 
-    c[ImGuiCol_TextSelectedBg]        = RGBA(0x31D3C644);
+    c[ImGuiCol_TextSelectedBg]        = RGBA(0xFFB80044);
     c[ImGuiCol_DragDropTarget]        = amber;
-    c[ImGuiCol_NavHighlight]          = RGBA(0x31D3C699);
+    c[ImGuiCol_NavHighlight]          = RGBA(0xFFB80099);
     c[ImGuiCol_NavWindowingHighlight] = RGBA(0xE7F1F755);
     c[ImGuiCol_ModalWindowDimBg]      = RGBA(0x00000099);
 

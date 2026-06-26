@@ -1,8 +1,5 @@
 // ============================================================================
-//  Menu — главное окно оверлея и контейнер вкладок.
-// ----------------------------------------------------------------------------
-//  Хранит список ITab. Чтобы добавить свою вкладку — создайте класс-наследник
-//  ITab и вызовите Menu::Get().AddTab(std::make_unique<MyTab>()).
+//  Menu - Byster shell and tab container.
 // ============================================================================
 
 #pragma once
@@ -18,14 +15,9 @@ class Menu
 public:
     static Menu& Get();
 
-    // Регистрация стандартных вкладок (Dashboard / Timers / Settings).
     void RegisterDefaultTabs();
-
-    // Добавить пользовательскую вкладку.
     void AddTab(std::unique_ptr<ITab> tab, void* owner = nullptr);
     void RemoveTabsByOwner(void* owner);
-
-    // Отрисовка главного окна с панелью вкладок.
     void Render();
 
 private:

@@ -76,7 +76,6 @@ if(FC_BUILD_OVERLAY)
 
     fc_add_object_module(fc_features
         src/Features/KeyBinder.cpp
-        src/Features/Statistics.cpp
     )
 
     fc_add_object_module(fc_gui
@@ -86,7 +85,6 @@ if(FC_BUILD_OVERLAY)
         src/GUI/Tabs/DashboardTab.cpp
         src/GUI/Tabs/SdkTab.cpp
         src/GUI/Tabs/SettingsTab.cpp
-        src/GUI/Tabs/TimersTab.cpp
     )
 
     fc_add_object_module(fc_sdk

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace fc::actions {
 
@@ -69,6 +70,7 @@ struct Status {
     std::string last_observation;
     std::string probe_summary;
     std::string sensor_summary;
+    std::vector<std::string> recent_events;
 };
 
 bool Start();

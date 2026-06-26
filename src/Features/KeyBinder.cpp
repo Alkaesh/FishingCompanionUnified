@@ -1,5 +1,5 @@
 // ============================================================================
-//  KeyBinder.cpp — реализация компонента назначения клавиш.
+//  KeyBinder.cpp - reusable ImGui hotkey assignment control.
 // ============================================================================
 
 #include "KeyBinder.h"
@@ -14,9 +14,9 @@ const char* KeyBinder::KeyName(int vk)
     static char name[32];
 
     if (vk == 0)
-        return "—";
+        return "None";
 
-    // Буквы/цифры — печатаем символом.
+    // Letters and digits are displayed as their printable character.
     if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9'))
     {
         name[0] = static_cast<char>(vk);
@@ -76,11 +76,11 @@ bool KeyBinder::Draw(const char* label, int* outKey)
     if (availableWidth >= 340.0f)
         ImGui::SameLine(rowStartX + availableWidth - buttonWidth);
 
-    // Каждому биндеру нужно своё состояние «слушаем нажатие».
+    // Each key slot needs its own "listening for input" state.
     static const void* s_listeningId = nullptr;
     const bool listening = (s_listeningId == outKey);
 
-    const char* caption = listening ? "[ нажмите клавишу ]" : KeyName(*outKey);
+    const char* caption = listening ? "[ press a key ]" : KeyName(*outKey);
 
     if (ImGui::Button(caption, ImVec2(buttonWidth, 0.0f)))
         s_listeningId = outKey;
@@ -90,12 +90,12 @@ bool KeyBinder::Draw(const char* label, int* outKey)
 
     if (listening)
     {
-        // Опрашиваем виртуальные коды и ловим первое нажатие.
+        // Scan virtual-key codes and capture the first pressed key.
         for (int vk = 0x08; vk <= 0xFE; ++vk)
         {
             if (GetAsyncKeyState(vk) & 0x8000)
             {
-                if (vk == VK_ESCAPE) // Esc — отмена назначения.
+                if (vk == VK_ESCAPE)
                 {
                     s_listeningId = nullptr;
                     break;
