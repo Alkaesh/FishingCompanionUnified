@@ -224,6 +224,19 @@ function Inject-Dll([int]$TargetPid, [string]$DllPath) {
     }
 }
 
+$process = $null
+
+if ($Build -or $UnloadOnly) {
+    $process = Get-TargetProcess
+    Write-Step "Target PID $($process.Id): $($process.Path)"
+    Unload-ExistingDll $process
+
+    if ($UnloadOnly) {
+        Write-Step "Unload-only requested; skipping injection."
+        return
+    }
+}
+
 if ($Build) {
     $cmake = Resolve-CMakeExe $CMakeExe
 
@@ -245,14 +258,10 @@ if (-not $UnloadOnly -and -not (Test-Path -LiteralPath $SourceDll)) {
     throw "Source DLL was not found: $SourceDll"
 }
 
-$process = Get-TargetProcess
-Write-Step "Target PID $($process.Id): $($process.Path)"
-
-Unload-ExistingDll $process
-
-if ($UnloadOnly) {
-    Write-Step "Unload-only requested; skipping injection."
-    return
+if (-not $process) {
+    $process = Get-TargetProcess
+    Write-Step "Target PID $($process.Id): $($process.Path)"
+    Unload-ExistingDll $process
 }
 
 $targetDir = Split-Path -Parent $TargetDll
