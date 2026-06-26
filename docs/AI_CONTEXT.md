@@ -66,6 +66,8 @@ cmake --preset msvc-x64-vs18
 cmake --build --preset release-vs18
 ```
 
+- `tools/auto_inject.ps1` defaults to the VS18 `release-vs18` preset and `build/cmake/vs18-x64/Release/FishingCompanion.dll`. It should stay a local developer helper: clear errors, no stealth behavior, no binaries committed.
+
 ## Current SDK Version
 
 `0.2.0`

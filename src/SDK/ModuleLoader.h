@@ -6,6 +6,7 @@
 
 #include <Windows.h>
 
+#include <mutex>
 #include <memory>
 #include <string>
 #include <thread>
@@ -39,12 +40,12 @@ public:
     void UnloadAll();
     bool RegisterTab(std::unique_ptr<fc::ITab> tab);
 
-    bool HasLoaded() const { return m_scanned; }
-    const std::wstring& ModsDirectory() const { return m_modsDirectory; }
-    const std::vector<std::wstring>& LoadedModules() const { return m_loadedModuleNames; }
-    const std::vector<std::wstring>& FailedModules() const { return m_failedModuleNames; }
-    const std::vector<ModuleRecord>& ModuleRecords() const { return m_moduleRecords; }
-    const std::vector<Event>& Events() const { return m_events; }
+    bool HasLoaded() const;
+    std::wstring ModsDirectory() const;
+    std::vector<std::wstring> LoadedModules() const;
+    std::vector<std::wstring> FailedModules() const;
+    std::vector<ModuleRecord> ModuleRecords() const;
+    std::vector<Event> Events() const;
 
 private:
     struct LoadedModule
@@ -71,6 +72,7 @@ private:
     std::vector<std::wstring> m_failedModuleNames;
     std::vector<ModuleRecord> m_moduleRecords;
     std::vector<Event> m_events;
+    mutable std::mutex m_mutex;
 };
 
 } // namespace fc::sdk

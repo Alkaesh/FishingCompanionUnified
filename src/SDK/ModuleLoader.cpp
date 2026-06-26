@@ -125,6 +125,42 @@ ModuleLoader& ModuleLoader::Get()
     return instance;
 }
 
+bool ModuleLoader::HasLoaded() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_scanned;
+}
+
+std::wstring ModuleLoader::ModsDirectory() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_modsDirectory;
+}
+
+std::vector<std::wstring> ModuleLoader::LoadedModules() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_loadedModuleNames;
+}
+
+std::vector<std::wstring> ModuleLoader::FailedModules() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_failedModuleNames;
+}
+
+std::vector<ModuleLoader::ModuleRecord> ModuleLoader::ModuleRecords() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_moduleRecords;
+}
+
+std::vector<ModuleLoader::Event> ModuleLoader::Events() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_events;
+}
+
 void ModuleLoader::BeginModuleInit(HMODULE module)
 {
     m_loadingModule = module;
@@ -169,6 +205,7 @@ bool ModuleLoader::RegisterTab(std::unique_ptr<fc::ITab> tab)
 
 void ModuleLoader::RecordEvent(std::string level, std::string message)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_events.push_back(Event{std::move(level), std::move(message)});
     if (m_events.size() > kMaxLoaderEvents)
         m_events.erase(m_events.begin(), m_events.begin() + (m_events.size() - kMaxLoaderEvents));
@@ -176,23 +213,28 @@ void ModuleLoader::RecordEvent(std::string level, std::string message)
 
 void ModuleLoader::RecordModule(std::wstring name, bool loaded, std::string detail)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_moduleRecords.push_back(ModuleRecord{std::move(name), loaded, std::move(detail)});
 }
 
 void ModuleLoader::LoadAll(HMODULE hostModule)
 {
-    if (m_scanned)
-        return;
-
-    m_scanned = true;
-    m_moduleRecords.clear();
-    m_events.clear();
-    m_loadedModuleNames.clear();
-    m_failedModuleNames.clear();
-
     const fs::path modsPath = GetHostDirectory(hostModule) / L"mods";
-    m_modsDirectory = modsPath.wstring();
-    RecordEvent("info", "Scanning SDK modules in " + Narrow(m_modsDirectory));
+    const std::wstring modsDirectory = modsPath.wstring();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_scanned)
+            return;
+
+        m_scanned = true;
+        m_moduleRecords.clear();
+        m_events.clear();
+        m_loadedModuleNames.clear();
+        m_failedModuleNames.clear();
+        m_modsDirectory = modsDirectory;
+    }
+
+    RecordEvent("info", "Scanning SDK modules in " + Narrow(modsDirectory));
 
     std::error_code ec;
     fs::create_directories(modsPath, ec);
@@ -225,7 +267,10 @@ void ModuleLoader::LoadAll(HMODULE hostModule)
             const std::string detail = "LoadLibraryW failed: " + Win32ErrorMessage(GetLastError());
             RecordModule(moduleName, false, detail);
             RecordEvent("error", Narrow(moduleName) + ": " + detail);
-            m_failedModuleNames.push_back(moduleName);
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_failedModuleNames.push_back(moduleName);
+            }
             continue;
         }
 
@@ -239,7 +284,10 @@ void ModuleLoader::LoadAll(HMODULE hostModule)
             const std::string detail = "missing " FCSDK_MODULE_INIT_NAME " export";
             RecordModule(moduleName, false, detail);
             RecordEvent("error", Narrow(moduleName) + ": " + detail);
-            m_failedModuleNames.push_back(moduleName);
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_failedModuleNames.push_back(moduleName);
+            }
             continue;
         }
 
@@ -257,14 +305,20 @@ void ModuleLoader::LoadAll(HMODULE hostModule)
                 : std::string(FCSDK_MODULE_INIT_NAME) + " raised " + HexException(exceptionCode);
             RecordModule(moduleName, false, detail);
             RecordEvent("error", Narrow(moduleName) + ": " + detail);
-            m_failedModuleNames.push_back(moduleName);
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_failedModuleNames.push_back(moduleName);
+            }
             continue;
         }
 
         const size_t registeredTabs = m_pendingTabs.size();
         CommitModuleInit(module);
         m_modules.push_back(LoadedModule{module, shutdown, moduleName});
-        m_loadedModuleNames.push_back(moduleName);
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_loadedModuleNames.push_back(moduleName);
+        }
         const std::string detail = std::to_string(registeredTabs) + " tab(s) registered";
         RecordModule(moduleName, true, detail);
         RecordEvent("info", Narrow(moduleName) + ": loaded, " + detail);
@@ -298,7 +352,10 @@ void ModuleLoader::UnloadAll()
     }
 
     m_modules.clear();
-    m_loadedModuleNames.clear();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_loadedModuleNames.clear();
+    }
 }
 
 } // namespace fc::sdk

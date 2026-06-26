@@ -10,6 +10,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -90,9 +91,11 @@ namespace fc {
 void SdkTab::Render()
 {
     const auto& loader = sdk::ModuleLoader::Get();
+    const std::vector<sdk::ModuleLoader::ModuleRecord> moduleRecords = loader.ModuleRecords();
+    const std::vector<sdk::ModuleLoader::Event> events = loader.Events();
     int loadedCount = 0;
     int failedCount = 0;
-    for (const sdk::ModuleLoader::ModuleRecord& record : loader.ModuleRecords())
+    for (const sdk::ModuleLoader::ModuleRecord& record : moduleRecords)
     {
         if (record.loaded)
             ++loadedCount;
@@ -142,7 +145,7 @@ void SdkTab::Render()
     ImGui::SeparatorText("Loaded Modules");
     if (BeginCard("##sdk_modules", ImVec2(0.0f, 190.0f)))
     {
-        if (loader.ModuleRecords().empty())
+        if (moduleRecords.empty())
         {
             ImGui::TextColored(RGBA(0x7F91A0FF), "No external modules loaded yet.");
         }
@@ -156,7 +159,7 @@ void SdkTab::Render()
             ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch, 0.66f);
             ImGui::TableHeadersRow();
 
-            for (const sdk::ModuleLoader::ModuleRecord& record : loader.ModuleRecords())
+            for (const sdk::ModuleLoader::ModuleRecord& record : moduleRecords)
             {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -179,7 +182,7 @@ void SdkTab::Render()
     ImGui::SeparatorText("Loader Events");
     if (BeginCard("##sdk_loader_events", ImVec2(0.0f, 170.0f)))
     {
-        if (loader.Events().empty())
+        if (events.empty())
         {
             ImGui::TextColored(RGBA(0x7F91A0FF), "No loader events yet.");
         }
@@ -187,9 +190,9 @@ void SdkTab::Render()
         {
             if (ImGui::BeginChild("##sdk_loader_events_scroll", ImVec2(0.0f, 0.0f), false))
             {
-                for (size_t i = loader.Events().size(); i > 0; --i)
+                for (size_t i = events.size(); i > 0; --i)
                 {
-                    const sdk::ModuleLoader::Event& event = loader.Events()[i - 1];
+                    const sdk::ModuleLoader::Event& event = events[i - 1];
                     ImGui::TextColored(EventColor(event.level), "%s", event.level.c_str());
                     ImGui::SameLine(78.0f);
                     ImGui::TextWrapped("%s", event.message.c_str());

@@ -58,6 +58,8 @@ The built-in SDK tab shows the current loader state:
 
 The public C ABI in `FCSDK.h` is unchanged; diagnostics are host-side only and are exposed through the built-in UI.
 
+The loader exposes diagnostics to UI code as bounded snapshot copies. Do not keep references to loader-owned vectors across frames.
+
 ## Current Version
 
 `0.2.0`

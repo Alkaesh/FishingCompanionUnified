@@ -56,6 +56,7 @@ The SDK tab contains:
 - `Loader Events`: recent scan, load, init, shutdown, and registration warnings
 
 The event log is bounded and newest-first. It is intended for local debugging, not as a persistent audit log.
+UI code reads loader diagnostics as per-frame snapshots, so module tables and events stay stable while load/unload diagnostics are being updated.
 
 ## Unload
 

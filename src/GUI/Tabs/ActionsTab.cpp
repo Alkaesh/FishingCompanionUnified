@@ -2,8 +2,12 @@
 
 #include "../../Actions/ActionRuntime.h"
 #include "../../Core/Overlay.h"
+#include "../Menu.h"
 
 #include "imgui.h"
+
+#include <cctype>
+#include <cstring>
 
 namespace {
 
@@ -59,9 +63,179 @@ bool ActionButton(const char* label, fc::actions::Command command, const ImVec2&
     return true;
 }
 
+enum class ActionStyle
+{
+    Normal,
+    Primary,
+    Danger,
+};
+
+struct ActionSpec
+{
+    const char* label;
+    fc::actions::Command command;
+    const char* keywords;
+    ActionStyle style = ActionStyle::Normal;
+};
+
+constexpr ActionSpec kSearchActions[] = {
+    {"Refresh", fc::actions::Command::Refresh, "runtime status refresh update actions ready"},
+    {"Hitch", fc::actions::Command::Hitch, "fishing hitch"},
+    {"Start Hooking", fc::actions::Command::StartHooking, "fishing start_hooking hook"},
+    {"Alternative", fc::actions::Command::AlternativeAction, "fishing alternative alt action"},
+    {"Podsak", fc::actions::Command::TogglePodsak, "fishing podsak toggle_podsak"},
+    {"Toggle Reel", fc::actions::Command::ToggleReel, "fishing reel toggle_reel"},
+    {"Set Toggle Reel", fc::actions::Command::FishingSetToggleReel, "fishing set toggle reel"},
+    {"Cut Line", fc::actions::Command::CutFishingLine, "fishing cut line cut_fishing_line"},
+    {"Return Idle", fc::actions::Command::ReturnIdle, "fishing return idle return_idle"},
+    {"Switch Throw Mode", fc::actions::Command::SwitchThrowMode, "fishing throw mode switch"},
+    {"Change Distance", fc::actions::Command::ChangeThrowDistance, "fishing throw distance change"},
+    {"Set Clip", fc::actions::Command::FishingSetClip, "fishing set clip"},
+    {"Rig Clip", fc::actions::Command::RigClip, "fishing rig clip"},
+    {"Bait 1", fc::actions::Command::HotSwapBait1, "fishing bait hotswap hot swap 1"},
+    {"Bait 2", fc::actions::Command::HotSwapBait2, "fishing bait hotswap hot swap 2"},
+    {"Bobber Depth", fc::actions::Command::ChangeBobberDepth, "fishing bobber depth"},
+    {"Rod Rest", fc::actions::Command::RodToRodrest, "fishing rod rest rodrest"},
+    {"Rod Slot", fc::actions::Command::RodSlot, "fishing rod slot"},
+    {"Hand HotSwap", fc::actions::Command::HandItemHotSwap, "fishing hand item hotswap hot swap"},
+    {"Auto Cast", fc::actions::Command::AutoCast, "auto cast autocast", ActionStyle::Primary},
+    {"Auto Catch", fc::actions::Command::AutoCatch, "auto catch autocatch", ActionStyle::Primary},
+    {"Auto Scout", fc::actions::Command::AutoScout, "auto scout autoscout scout_cast", ActionStyle::Primary},
+    {"Stop All", fc::actions::Command::StopAll, "stop all cancel halt", ActionStyle::Danger},
+    {"Mark Spot", fc::actions::Command::MarkSpot, "mark spot"},
+    {"Clear Spot", fc::actions::Command::ClearSpot, "clear spot"},
+    {"Scan Fish", fc::actions::Command::ScanFish, "scan fish fish_scan"},
+    {"Keep Fish", fc::actions::Command::KeepFish, "keep fish catch result"},
+    {"Release Fish", fc::actions::Command::ReleaseFish, "release fish catch result"},
+    {"Continue Fishing", fc::actions::Command::ContinueFishing, "continue fishing keep and cast keep_and_cast"},
+    {"Manual Roll", fc::actions::Command::ManualRoll, "reel manual roll"},
+    {"Roll Boost", fc::actions::Command::ManualRollBoost, "reel manual roll boost"},
+    {"Toggle Auto Reel", fc::actions::Command::ToggleAutoReel, "reel auto reel toggle start stop"},
+    {"Auto Roll", fc::actions::Command::ToggleAutoRollMode, "reel auto roll mode"},
+    {"Reset Auto", fc::actions::Command::ResetAutoRollMode, "reel reset auto roll"},
+    {"Switch Speed", fc::actions::Command::SwitchReelSpeed, "reel switch speed"},
+    {"Change Speed", fc::actions::Command::ChangeRollSpeed, "reel change speed"},
+    {"Friction", fc::actions::Command::ChangeFriction, "reel friction"},
+    {"Speed Mode", fc::actions::Command::RollSpeedMode, "reel speed mode"},
+    {"Transmission", fc::actions::Command::ChangeTransmissionMode, "reel transmission mode"},
+    {"Engine", fc::actions::Command::ToggleEngine, "reel engine"},
+    {"Toggle Gearbox", fc::actions::Command::ToggleTransmission, "reel gearbox transmission"},
+    {"Catch Fish", fc::actions::Command::DebugCatchFish, "sandbox debug catch fish"},
+    {"Repair Rod", fc::actions::Command::DebugRepairRod, "sandbox debug repair rod"},
+    {"Spawn Fish", fc::actions::Command::DebugSpawnFish, "sandbox debug spawn fish"},
+    {"Fish Jump", fc::actions::Command::DebugFishJump, "sandbox debug fish jump"},
+    {"Level Up", fc::actions::Command::DebugLevelUp, "sandbox debug level up"},
+    {"Debug Hitch", fc::actions::Command::DebugHitch, "sandbox debug hitch"},
+    {"Snapshot", fc::actions::Command::SnapshotDiagnostics, "diagnostics snapshot"},
+    {"Toggle Diagnostics", fc::actions::Command::ToggleDiagnostics, "diagnostics log start stop"},
+};
+
+bool ContainsNoCase(const char* haystack, const char* needle)
+{
+    if (!needle || needle[0] == '\0')
+        return true;
+    if (!haystack)
+        return false;
+
+    for (const char* start = haystack; *start; ++start)
+    {
+        const char* h = start;
+        const char* n = needle;
+        while (*h && *n &&
+               std::tolower(static_cast<unsigned char>(*h)) ==
+               std::tolower(static_cast<unsigned char>(*n)))
+        {
+            ++h;
+            ++n;
+        }
+
+        if (*n == '\0')
+            return true;
+    }
+
+    return false;
+}
+
+bool ActionMatches(const ActionSpec& action, const char* query)
+{
+    return ContainsNoCase(action.label, query) || ContainsNoCase(action.keywords, query);
+}
+
+int PushActionStyle(ActionStyle style)
+{
+    if (style == ActionStyle::Primary)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x3A2B10FF));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x5A3D0BFF));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0xFFB800FF));
+        return 3;
+    }
+
+    if (style == ActionStyle::Danger)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x6A2430FF));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x8A3142FF));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0xC24A5CFF));
+        return 3;
+    }
+
+    return 0;
+}
+
+bool StyledActionButton(const ActionSpec& action, const ImVec2& size)
+{
+    const int pushed = PushActionStyle(action.style);
+    const bool pressed = ActionButton(action.label, action.command, size);
+    if (pushed > 0)
+        ImGui::PopStyleColor(pushed);
+    return pressed;
+}
+
+bool HasSearchResult(const char* query)
+{
+    for (const ActionSpec& action : kSearchActions)
+    {
+        if (ActionMatches(action, query))
+            return true;
+    }
+
+    return false;
+}
+
+void RenderSearchResults(const char* query, const ImVec2& buttonSize, float gap)
+{
+    ImGui::Spacing();
+    ImGui::SeparatorText("Search Results");
+
+    int shown = 0;
+    for (const ActionSpec& action : kSearchActions)
+    {
+        if (!ActionMatches(action, query))
+            continue;
+
+        if ((shown % 2) == 1)
+            ImGui::SameLine(0.0f, gap);
+
+        StyledActionButton(action, buttonSize);
+        ++shown;
+    }
+
+    if (shown == 0)
+        ImGui::TextColored(RGBA(0x7F91A0FF), "No action buttons matched this search.");
+}
+
 } // namespace
 
 namespace fc {
+
+const char* ActionsTab::SearchKeywords() const
+{
+    return "actions commands fishing reel diagnostics log queue runtime refresh hitch start hooking "
+           "alternative podsak toggle reel cut line return idle throw distance clip bait bobber rod rest "
+           "auto cast auto catch auto scout stop all mark spot clear spot scan fish keep fish release fish "
+           "continue fishing manual roll boost auto reel auto roll reset speed friction transmission engine "
+           "gearbox sandbox debug catch fish repair rod spawn fish fish jump level up snapshot start log stop log";
+}
 
 void ActionsTab::Render()
 {
@@ -101,12 +275,19 @@ void ActionsTab::Render()
     if (refresh_requested)
         return;
 
-    ImGui::Spacing();
-    ImGui::SeparatorText("Fishing");
-
     const float gap = 10.0f;
     const float width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
     const ImVec2 button_size(width, 36.0f);
+    const char* query = Menu::Get().SearchText();
+
+    if (Menu::Get().HasSearchText() && HasSearchResult(query))
+    {
+        RenderSearchResults(query, button_size, gap);
+        return;
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Fishing");
 
     ActionButton("Hitch", actions::Command::Hitch, button_size);
     ImGui::SameLine(0.0f, gap);

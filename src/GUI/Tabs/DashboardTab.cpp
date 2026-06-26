@@ -12,6 +12,7 @@
 #include "imgui.h"
 
 #include <cstdio>
+#include <vector>
 
 namespace {
 
@@ -70,10 +71,11 @@ void DashboardTab::Render()
 {
     const actions::Status runtime = actions::GetStatus();
     const auto& loader = sdk::ModuleLoader::Get();
+    const std::vector<sdk::ModuleLoader::ModuleRecord> moduleRecords = loader.ModuleRecords();
 
     int loadedModules = 0;
     int failedModules = 0;
-    for (const sdk::ModuleLoader::ModuleRecord& record : loader.ModuleRecords())
+    for (const sdk::ModuleLoader::ModuleRecord& record : moduleRecords)
     {
         if (record.loaded)
             ++loadedModules;

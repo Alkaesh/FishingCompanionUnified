@@ -64,7 +64,9 @@ The default host menu registers only implemented sections:
 
 Do not add visible controls for features that do not exist yet. Placeholder toggles such as radar, HUD visibility, or reminder settings should stay out of the default menu until the backing runtime exists.
 
-The top search box filters sections by title and keywords. Current useful searches include `actions`, `diagnostics`, `modules`, `sdk`, `hotkeys`, and `settings`.
+The top search box filters sections by title, tab keywords, and built-in action button labels. Current useful searches include `auto scout`, `continue fishing`, `release fish`, `snapshot`, `diagnostics`, `modules`, `sdk`, `hotkeys`, and `settings`.
+
+When an action button search has matches, `Actions` switches to a compact `Search Results` view that renders only the matching command buttons. Keep new action buttons in the search index when adding commands.
 
 Topbar controls are right-aligned from the window edge: settings, collapse, then search. Do not place toolbar controls with fixed offsets from the left or with `SameLine` chains that can push the last button outside the menu. Toolbar buttons should perform a real action; decorative buttons are not allowed in the host shell.
 

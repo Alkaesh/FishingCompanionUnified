@@ -90,19 +90,6 @@ bool ContainsNoCase(const char* haystack, const char* needle)
     return false;
 }
 
-const char* TabSearchKeywords(const char* title)
-{
-    if (std::strcmp(title, "Dashboard") == 0)
-        return "overview status runtime modules hotkeys health";
-    if (std::strcmp(title, "Actions") == 0)
-        return "actions commands fishing reel diagnostics log queue keep release continue";
-    if (std::strcmp(title, "Settings") == 0)
-        return "settings hotkeys menu unload scale appearance";
-    if (std::strcmp(title, "SDK") == 0)
-        return "sdk modules plugins loader abi imgui";
-    return "";
-}
-
 bool TabMatchesSearch(const fc::ITab* tab, const char* query)
 {
     if (!query || query[0] == '\0')
@@ -111,7 +98,7 @@ bool TabMatchesSearch(const fc::ITab* tab, const char* query)
         return false;
 
     const char* title = GetTabTitle(*tab);
-    return ContainsNoCase(title, query) || ContainsNoCase(TabSearchKeywords(title), query);
+    return ContainsNoCase(title, query) || ContainsNoCase(tab->SearchKeywords(), query);
 }
 
 bool BeginPanelChild(const char* id, const ImVec2& size)
@@ -361,7 +348,6 @@ void Menu::Render()
         ImGui::SetCursorPos(ImVec2(12.0f, kTopbarY));
         DrawBrand();
 
-        static char searchText[64]{};
         const float settingsX = windowSize.x - kWindowEdgePadding - kToolbarButtonSize;
         const float collapseX = settingsX - kToolbarGap - kToolbarButtonSize;
         const bool showSearch = windowSize.x >= 740.0f;
@@ -378,7 +364,11 @@ void Menu::Render()
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
             ImGui::SetNextItemWidth(searchWidth);
-            ImGui::InputTextWithHint("##byster_search", "Search", searchText, sizeof(searchText));
+            ImGui::InputTextWithHint(
+                "##byster_search",
+                "Search",
+                m_searchText.data(),
+                m_searchText.size());
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(3);
         }
@@ -390,7 +380,7 @@ void Menu::Render()
         ImGui::SetCursorPos(ImVec2(settingsX, kToolbarY));
         if (ToolbarButton("settings_shortcut", ToolIcon::Settings, "Open Settings"))
         {
-            searchText[0] = '\0';
+            m_searchText[0] = '\0';
 
             for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
             {
@@ -406,17 +396,17 @@ void Menu::Render()
         int firstSearchMatch = -1;
         for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
         {
-            if (TabMatchesSearch(m_tabs[i].tab.get(), searchText))
+            if (TabMatchesSearch(m_tabs[i].tab.get(), m_searchText.data()))
             {
                 firstSearchMatch = i;
                 break;
             }
         }
 
-        if (searchText[0] != '\0' &&
+        if (m_searchText[0] != '\0' &&
             (m_selectedTab < 0 ||
              m_selectedTab >= static_cast<int>(m_tabs.size()) ||
-             !TabMatchesSearch(m_tabs[m_selectedTab].tab.get(), searchText)))
+             !TabMatchesSearch(m_tabs[m_selectedTab].tab.get(), m_searchText.data())))
         {
             if (firstSearchMatch >= 0)
                 m_selectedTab = firstSearchMatch;
@@ -427,7 +417,7 @@ void Menu::Render()
         for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
         {
             ITab* tab = m_tabs[i].tab.get();
-            if (!tab || !TabMatchesSearch(tab, searchText))
+            if (!tab || !TabMatchesSearch(tab, m_searchText.data()))
                 continue;
 
             const char* title = GetTabTitle(*tab);
