@@ -58,15 +58,19 @@ The built-in host shell now uses the `Byster` brand treatment: top navigation, c
 The default host menu registers only implemented sections:
 
 - `Dashboard`: live runtime/module/hotkey overview
-- `Actions`: action queue, command buttons, catch result controls, diagnostics, and event log
+- `Actions`: action queue, command buttons, catch result controls, and diagnostics controls
+- `Logs`: unified runtime/SDK event viewer with level filters, local search, highlight, auto-scroll, and log-folder opener
+- `Health`: compact runtime/SDK diagnostics, queue state, module health, loader event counts, and useful paths
 - `Settings`: implemented hotkeys and interface scale
 - `SDK`: module loader status and diagnostics
 
 Do not add visible controls for features that do not exist yet. Placeholder toggles such as radar, HUD visibility, or reminder settings should stay out of the default menu until the backing runtime exists.
 
-The top search box filters sections by title, tab keywords, and built-in action button labels. Current useful searches include `auto scout`, `continue fishing`, `release fish`, `snapshot`, `diagnostics`, `modules`, `sdk`, `hotkeys`, and `settings`.
+The top search box filters sections by title, tab keywords, and built-in action button labels. Current useful searches include `auto scout`, `continue fishing`, `release fish`, `snapshot`, `logs`, `health`, `diagnostics`, `modules`, `sdk`, `hotkeys`, and `settings`.
 
-When an action button search has matches, `Actions` switches to a compact `Search Results` view that renders only the matching command buttons. Keep new action buttons in the search index when adding commands.
+When an action button search has matches, `Actions` switches to a compact `Search Results` view that renders only the matching command buttons and highlights the matching label text. Keep new action buttons in the search index when adding commands.
+
+Action buttons reflect runtime readiness. Commands that need resolved game actions are disabled while the action runtime is still waiting; maintenance controls such as `Refresh`, `Stop All`, `Snapshot`, and log toggling remain available. Busy and queued states are reflected directly in button captions.
 
 Topbar controls are right-aligned from the window edge: settings, collapse, then search. Do not place toolbar controls with fixed offsets from the left or with `SameLine` chains that can push the last button outside the menu. Toolbar buttons should perform a real action; decorative buttons are not allowed in the host shell.
 
@@ -95,6 +99,8 @@ When adding built-in labels:
 The host has two built-in diagnostic surfaces that should stay compact and readable:
 
 - `Actions` / `Runtime`: current action runtime state, queue count, last command result, and newest runtime events from `fc::actions::Status::recent_events`.
+- `Logs`: merged runtime events and SDK loader events with `info`, `warn`, and `error` filters.
+- `Health`: quick operational checks for runtime readiness, queue depth, SDK scan status, module failures, and event counts.
 - `SDK` / `Loaded Modules` and `Loader Events`: module load results and host-side SDK loader events from `fc::sdk::ModuleLoader`.
 
 When adding new runtime or loader events, keep messages short and actionable. Prefer:

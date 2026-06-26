@@ -5,6 +5,8 @@
 #include "Menu.h"
 #include "Tabs/ActionsTab.h"
 #include "Tabs/DashboardTab.h"
+#include "Tabs/HealthTab.h"
+#include "Tabs/LogsTab.h"
 #include "Tabs/SettingsTab.h"
 #include "Tabs/SdkTab.h"
 
@@ -285,10 +287,12 @@ void Menu::RegisterDefaultTabs()
         return;
 
     m_defaultTabsRegistered = true;
-    m_tabs.reserve(m_tabs.size() + 4);
+    m_tabs.reserve(m_tabs.size() + 6);
 
     AddTab(std::make_unique<DashboardTab>());
     AddTab(std::make_unique<ActionsTab>());
+    AddTab(std::make_unique<LogsTab>());
+    AddTab(std::make_unique<HealthTab>());
     AddTab(std::make_unique<SettingsTab>());
     AddTab(std::make_unique<SdkTab>());
 }
@@ -350,8 +354,8 @@ void Menu::Render()
 
         const float settingsX = windowSize.x - kWindowEdgePadding - kToolbarButtonSize;
         const float collapseX = settingsX - kToolbarGap - kToolbarButtonSize;
-        const bool showSearch = windowSize.x >= 740.0f;
-        const float searchWidth = showSearch ? std::clamp(windowSize.x * 0.15f, 108.0f, 170.0f) : 0.0f;
+        const bool showSearch = windowSize.x >= 760.0f;
+        const float searchWidth = showSearch ? std::clamp(windowSize.x * 0.14f, 108.0f, 160.0f) : 0.0f;
         const float searchX = collapseX - 8.0f - searchWidth;
         const float navRight = (showSearch ? searchX : collapseX) - 12.0f;
 
@@ -460,7 +464,9 @@ void Menu::Render()
                 {
                     ImGui::TextColored(RGBA(0xFFD56BFF), "No matching section");
                     ImGui::Spacing();
-                    ImGui::TextColored(RGBA(0x7F838CFF), "Try: actions, sdk, hotkeys, diagnostics, modules.");
+                    ImGui::TextColored(
+                        RGBA(0x7F838CFF),
+                        "Try: actions, logs, health, sdk, hotkeys, diagnostics, modules.");
                 }
             }
             ImGui::EndChild();

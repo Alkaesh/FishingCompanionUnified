@@ -8,6 +8,7 @@
 
 #include <cctype>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -51,10 +52,54 @@ void EndCard()
     ImGui::PopStyleColor(2);
 }
 
-bool ActionButton(const char* label, fc::actions::Command command, const ImVec2& size)
+std::string ButtonCaption(const char* label, const fc::actions::Status& status, bool enabled)
 {
-    if (!ImGui::Button(label, size))
+    std::string caption(label ? label : "");
+    if (!enabled)
+    {
+        caption += " [wait]";
+        return caption;
+    }
+
+    if (status.busy)
+        caption += " [busy]";
+    else if (status.queued > 0)
+        caption += " [q:";
+    else
+        return caption;
+
+    if (status.queued > 0 && !status.busy)
+    {
+        caption += std::to_string(status.queued);
+        caption += "]";
+    }
+
+    return caption;
+}
+
+bool ActionButton(
+    const char* label,
+    fc::actions::Command command,
+    const ImVec2& size,
+    const fc::actions::Status& status,
+    bool allowWhenNotReady = false)
+{
+    const bool enabled = allowWhenNotReady || status.ready;
+    const std::string caption = ButtonCaption(label, status, enabled);
+    const std::string imguiLabel = caption + "##" + (label ? label : "action");
+
+    if (!enabled)
+        ImGui::BeginDisabled();
+
+    if (!ImGui::Button(imguiLabel.c_str(), size))
+    {
+        if (!enabled)
+            ImGui::EndDisabled();
         return false;
+    }
+
+    if (!enabled)
+        ImGui::EndDisabled();
 
     if (command == fc::actions::Command::AutoCast)
         fc::Overlay::Get().SetMenuVisible(false);
@@ -161,6 +206,83 @@ bool ActionMatches(const ActionSpec& action, const char* query)
     return ContainsNoCase(action.label, query) || ContainsNoCase(action.keywords, query);
 }
 
+bool CanRunWhenNotReady(fc::actions::Command command)
+{
+    switch (command)
+    {
+    case fc::actions::Command::Refresh:
+    case fc::actions::Command::StopAll:
+    case fc::actions::Command::SnapshotDiagnostics:
+    case fc::actions::Command::ToggleDiagnostics:
+        return true;
+    default:
+        return false;
+    }
+}
+
+size_t FindNoCase(const char* haystack, const char* needle)
+{
+    if (!needle || needle[0] == '\0' || !haystack)
+        return std::string::npos;
+
+    for (size_t start = 0; haystack[start] != '\0'; ++start)
+    {
+        size_t h = start;
+        const char* n = needle;
+        while (haystack[h] && *n &&
+               std::tolower(static_cast<unsigned char>(haystack[h])) ==
+               std::tolower(static_cast<unsigned char>(*n)))
+        {
+            ++h;
+            ++n;
+        }
+
+        if (*n == '\0')
+            return start;
+    }
+
+    return std::string::npos;
+}
+
+void HighlightLabel(const char* label, const char* query)
+{
+    const size_t match = FindNoCase(label, query);
+    if (match == std::string::npos)
+    {
+        ImGui::TextColored(RGBA(0x7F91A0FF), "%s", label);
+        return;
+    }
+
+    const std::string text(label);
+    const size_t length = std::strlen(query);
+    const std::string before = text.substr(0, match);
+    const std::string selected = text.substr(match, length);
+    const std::string after = text.substr(match + length);
+
+    ImGui::TextColored(RGBA(0x7F91A0FF), "match:");
+    ImGui::SameLine();
+    if (!before.empty())
+    {
+        ImGui::TextColored(RGBA(0xB9BBC0FF), "%s", before.c_str());
+        ImGui::SameLine(0.0f, 0.0f);
+    }
+
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 textSize = ImGui::CalcTextSize(selected.c_str());
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        ImVec2(pos.x - 2.0f, pos.y),
+        ImVec2(pos.x + textSize.x + 2.0f, pos.y + textSize.y),
+        ImGui::ColorConvertFloat4ToU32(RGBA(0xFFB800CC)),
+        2.0f);
+    ImGui::TextColored(RGBA(0x121315FF), "%s", selected.c_str());
+
+    if (!after.empty())
+    {
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::TextColored(RGBA(0xB9BBC0FF), "%s", after.c_str());
+    }
+}
+
 int PushActionStyle(ActionStyle style)
 {
     if (style == ActionStyle::Primary)
@@ -182,10 +304,10 @@ int PushActionStyle(ActionStyle style)
     return 0;
 }
 
-bool StyledActionButton(const ActionSpec& action, const ImVec2& size)
+bool StyledActionButton(const ActionSpec& action, const ImVec2& size, const fc::actions::Status& status)
 {
     const int pushed = PushActionStyle(action.style);
-    const bool pressed = ActionButton(action.label, action.command, size);
+    const bool pressed = ActionButton(action.label, action.command, size, status, CanRunWhenNotReady(action.command));
     if (pushed > 0)
         ImGui::PopStyleColor(pushed);
     return pressed;
@@ -202,7 +324,11 @@ bool HasSearchResult(const char* query)
     return false;
 }
 
-void RenderSearchResults(const char* query, const ImVec2& buttonSize, float gap)
+void RenderSearchResults(
+    const char* query,
+    const ImVec2& buttonSize,
+    float gap,
+    const fc::actions::Status& status)
 {
     ImGui::Spacing();
     ImGui::SeparatorText("Search Results");
@@ -216,7 +342,10 @@ void RenderSearchResults(const char* query, const ImVec2& buttonSize, float gap)
         if ((shown % 2) == 1)
             ImGui::SameLine(0.0f, gap);
 
-        StyledActionButton(action, buttonSize);
+        ImGui::BeginGroup();
+        HighlightLabel(action.label, query);
+        StyledActionButton(action, buttonSize, status);
+        ImGui::EndGroup();
         ++shown;
     }
 
@@ -256,7 +385,12 @@ void ActionsTab::Render()
             ImGui::SameLine(refreshX);
         else
             ImGui::SameLine();
-        refresh_requested = ActionButton("Refresh", actions::Command::Refresh, ImVec2(112.0f, 30.0f));
+        refresh_requested = ActionButton(
+            "Refresh",
+            actions::Command::Refresh,
+            ImVec2(112.0f, 30.0f),
+            status,
+            true);
 
         if (!status.message.empty())
             ImGui::TextWrapped("%s", status.message.c_str());
@@ -279,80 +413,83 @@ void ActionsTab::Render()
     const float width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
     const ImVec2 button_size(width, 36.0f);
     const char* query = Menu::Get().SearchText();
+    auto actionButton = [&](const char* label, actions::Command command, bool allowWhenNotReady = false) {
+        return ActionButton(label, command, button_size, status, allowWhenNotReady);
+    };
 
     if (Menu::Get().HasSearchText() && HasSearchResult(query))
     {
-        RenderSearchResults(query, button_size, gap);
+        RenderSearchResults(query, button_size, gap, status);
         return;
     }
 
     ImGui::Spacing();
     ImGui::SeparatorText("Fishing");
 
-    ActionButton("Hitch", actions::Command::Hitch, button_size);
+    actionButton("Hitch", actions::Command::Hitch);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Start Hooking", actions::Command::StartHooking, button_size);
+    actionButton("Start Hooking", actions::Command::StartHooking);
 
-    ActionButton("Alternative", actions::Command::AlternativeAction, button_size);
+    actionButton("Alternative", actions::Command::AlternativeAction);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Podsak", actions::Command::TogglePodsak, button_size);
+    actionButton("Podsak", actions::Command::TogglePodsak);
 
-    ActionButton("Toggle Reel", actions::Command::ToggleReel, button_size);
+    actionButton("Toggle Reel", actions::Command::ToggleReel);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Set Toggle Reel", actions::Command::FishingSetToggleReel, button_size);
+    actionButton("Set Toggle Reel", actions::Command::FishingSetToggleReel);
 
-    ActionButton("Cut Line", actions::Command::CutFishingLine, button_size);
+    actionButton("Cut Line", actions::Command::CutFishingLine);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Return Idle", actions::Command::ReturnIdle, button_size);
+    actionButton("Return Idle", actions::Command::ReturnIdle);
 
-    ActionButton("Switch Throw Mode", actions::Command::SwitchThrowMode, button_size);
+    actionButton("Switch Throw Mode", actions::Command::SwitchThrowMode);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Change Distance", actions::Command::ChangeThrowDistance, button_size);
+    actionButton("Change Distance", actions::Command::ChangeThrowDistance);
 
-    ActionButton("Set Clip", actions::Command::FishingSetClip, button_size);
+    actionButton("Set Clip", actions::Command::FishingSetClip);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Rig Clip", actions::Command::RigClip, button_size);
+    actionButton("Rig Clip", actions::Command::RigClip);
 
-    ActionButton("Bait 1", actions::Command::HotSwapBait1, button_size);
+    actionButton("Bait 1", actions::Command::HotSwapBait1);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Bait 2", actions::Command::HotSwapBait2, button_size);
+    actionButton("Bait 2", actions::Command::HotSwapBait2);
 
-    ActionButton("Bobber Depth", actions::Command::ChangeBobberDepth, button_size);
+    actionButton("Bobber Depth", actions::Command::ChangeBobberDepth);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Rod Rest", actions::Command::RodToRodrest, button_size);
+    actionButton("Rod Rest", actions::Command::RodToRodrest);
 
-    ActionButton("Rod Slot", actions::Command::RodSlot, button_size);
+    actionButton("Rod Slot", actions::Command::RodSlot);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Hand HotSwap", actions::Command::HandItemHotSwap, button_size);
+    actionButton("Hand HotSwap", actions::Command::HandItemHotSwap);
 
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x3A2B10FF));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x5A3D0BFF));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0xFFB800FF));
-    ActionButton("Auto Cast", actions::Command::AutoCast, button_size);
+    actionButton("Auto Cast", actions::Command::AutoCast);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Auto Catch", actions::Command::AutoCatch, button_size);
-    ActionButton("Auto Scout", actions::Command::AutoScout, button_size);
+    actionButton("Auto Catch", actions::Command::AutoCatch);
+    actionButton("Auto Scout", actions::Command::AutoScout);
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine(0.0f, gap);
     ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x6A2430FF));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x8A3142FF));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0xC24A5CFF));
-    ActionButton("Stop All", actions::Command::StopAll, button_size);
+    actionButton("Stop All", actions::Command::StopAll, true);
     ImGui::PopStyleColor(3);
 
-    ActionButton("Mark Spot", actions::Command::MarkSpot, button_size);
+    actionButton("Mark Spot", actions::Command::MarkSpot);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Clear Spot", actions::Command::ClearSpot, button_size);
-    ActionButton("Scan Fish", actions::Command::ScanFish, button_size);
+    actionButton("Clear Spot", actions::Command::ClearSpot);
+    actionButton("Scan Fish", actions::Command::ScanFish);
 
     ImGui::Spacing();
     ImGui::SeparatorText("Catch Result");
-    ActionButton("Keep Fish", actions::Command::KeepFish, button_size);
+    actionButton("Keep Fish", actions::Command::KeepFish);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Release Fish", actions::Command::ReleaseFish, button_size);
-    ActionButton("Continue Fishing", actions::Command::ContinueFishing, button_size);
+    actionButton("Release Fish", actions::Command::ReleaseFish);
+    actionButton("Continue Fishing", actions::Command::ContinueFishing);
 
     ImGui::Spacing();
     ImGui::SeparatorText("Reel");
@@ -362,46 +499,45 @@ void ActionsTab::Render()
         status.auto_reel_enabled ? "on" : "off",
         status.auto_reel_ticks);
 
-    ActionButton("Manual Roll", actions::Command::ManualRoll, button_size);
+    actionButton("Manual Roll", actions::Command::ManualRoll);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Roll Boost", actions::Command::ManualRollBoost, button_size);
+    actionButton("Roll Boost", actions::Command::ManualRollBoost);
 
-    ActionButton(
+    actionButton(
         status.auto_reel_enabled ? "Stop Auto Reel" : "Start Auto Reel",
-        actions::Command::ToggleAutoReel,
-        button_size);
+        actions::Command::ToggleAutoReel);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Auto Roll", actions::Command::ToggleAutoRollMode, button_size);
+    actionButton("Auto Roll", actions::Command::ToggleAutoRollMode);
 
-    ActionButton("Reset Auto", actions::Command::ResetAutoRollMode, button_size);
+    actionButton("Reset Auto", actions::Command::ResetAutoRollMode);
 
-    ActionButton("Switch Speed", actions::Command::SwitchReelSpeed, button_size);
+    actionButton("Switch Speed", actions::Command::SwitchReelSpeed);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Change Speed", actions::Command::ChangeRollSpeed, button_size);
+    actionButton("Change Speed", actions::Command::ChangeRollSpeed);
 
-    ActionButton("Friction", actions::Command::ChangeFriction, button_size);
+    actionButton("Friction", actions::Command::ChangeFriction);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Speed Mode", actions::Command::RollSpeedMode, button_size);
+    actionButton("Speed Mode", actions::Command::RollSpeedMode);
 
-    ActionButton("Transmission", actions::Command::ChangeTransmissionMode, button_size);
+    actionButton("Transmission", actions::Command::ChangeTransmissionMode);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Engine", actions::Command::ToggleEngine, button_size);
+    actionButton("Engine", actions::Command::ToggleEngine);
 
-    ActionButton("Toggle Gearbox", actions::Command::ToggleTransmission, button_size);
+    actionButton("Toggle Gearbox", actions::Command::ToggleTransmission);
 
     ImGui::Spacing();
     ImGui::SeparatorText("Sandbox Debug");
-    ActionButton("Catch Fish", actions::Command::DebugCatchFish, button_size);
+    actionButton("Catch Fish", actions::Command::DebugCatchFish);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Repair Rod", actions::Command::DebugRepairRod, button_size);
+    actionButton("Repair Rod", actions::Command::DebugRepairRod);
 
-    ActionButton("Spawn Fish", actions::Command::DebugSpawnFish, button_size);
+    actionButton("Spawn Fish", actions::Command::DebugSpawnFish);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Fish Jump", actions::Command::DebugFishJump, button_size);
+    actionButton("Fish Jump", actions::Command::DebugFishJump);
 
-    ActionButton("Level Up", actions::Command::DebugLevelUp, button_size);
+    actionButton("Level Up", actions::Command::DebugLevelUp);
     ImGui::SameLine(0.0f, gap);
-    ActionButton("Debug Hitch", actions::Command::DebugHitch, button_size);
+    actionButton("Debug Hitch", actions::Command::DebugHitch);
 
     ImGui::Spacing();
     ImGui::SeparatorText("Diagnostics");
@@ -420,12 +556,12 @@ void ActionsTab::Render()
     if (!status.sensor_summary.empty())
         ImGui::TextWrapped("%s", status.sensor_summary.c_str());
 
-    ActionButton("Snapshot", actions::Command::SnapshotDiagnostics, button_size);
+    actionButton("Snapshot", actions::Command::SnapshotDiagnostics, true);
     ImGui::SameLine(0.0f, gap);
-    ActionButton(
+    actionButton(
         status.diagnostics_enabled ? "Stop Log" : "Start Log",
         actions::Command::ToggleDiagnostics,
-        button_size);
+        true);
 
     ImGui::Spacing();
     ImGui::SeparatorText("Event Log");

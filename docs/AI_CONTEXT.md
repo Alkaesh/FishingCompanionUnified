@@ -36,7 +36,9 @@ Not allowed:
 - `src/Actions/ActionRuntime.*`: action queue, status model, file logging, and recent UI event buffer.
 - `src/GUI/Menu.cpp`: Byster-branded shell, top navigation, compact toolbar, content panel.
 - `src/GUI/Theme.cpp`: visual system and ImGui style.
-- `src/GUI/Tabs/ActionsTab.cpp`: action buttons, runtime status, and recent runtime event log.
+- `src/GUI/Tabs/ActionsTab.cpp`: action buttons, runtime status, action search results, readiness-aware button states.
+- `src/GUI/Tabs/LogsTab.cpp`: unified runtime and SDK event viewer with filters, search highlight, auto-scroll, and log-folder opener.
+- `src/GUI/Tabs/HealthTab.cpp`: compact diagnostics for action runtime, SDK modules, loader events, and paths.
 - `src/GUI/Tabs/SdkTab.cpp`: SDK status, loaded module table, and loader event log.
 - `src/Core/Overlay.cpp`: DX11 lifecycle, cursor handling, module loading.
 - `docs/QUICKSTART.md`: how to write a module.

@@ -83,6 +83,8 @@ if(FC_BUILD_OVERLAY)
         src/GUI/Theme.cpp
         src/GUI/Tabs/ActionsTab.cpp
         src/GUI/Tabs/DashboardTab.cpp
+        src/GUI/Tabs/HealthTab.cpp
+        src/GUI/Tabs/LogsTab.cpp
         src/GUI/Tabs/SdkTab.cpp
         src/GUI/Tabs/SettingsTab.cpp
     )
@@ -113,6 +115,7 @@ if(FC_BUILD_OVERLAY)
         d3d11
         dxgi
         d3dcompiler
+        shell32
     )
 
     add_dependencies(FishingCompanion
