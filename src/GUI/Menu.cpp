@@ -8,6 +8,7 @@
 #include "Tabs/SettingsTab.h"
 #include "Tabs/SdkTab.h"
 
+#include "../Core/Overlay.h"
 #include "imgui.h"
 
 #include <algorithm>
@@ -15,6 +16,15 @@
 #include <cstring>
 
 namespace {
+
+constexpr float kTopbarHeight = 42.0f;
+constexpr float kTopbarY = 7.0f;
+constexpr float kToolbarY = 8.0f;
+constexpr float kToolbarButtonSize = 28.0f;
+constexpr float kToolbarGap = 6.0f;
+constexpr float kWindowEdgePadding = 10.0f;
+constexpr float kBrandWidth = 92.0f;
+constexpr float kNavStartX = 106.0f;
 
 ImVec2 Add(const ImVec2& a, const ImVec2& b)
 {
@@ -85,7 +95,7 @@ const char* TabSearchKeywords(const char* title)
     if (std::strcmp(title, "Dashboard") == 0)
         return "overview status runtime modules hotkeys health";
     if (std::strcmp(title, "Actions") == 0)
-        return "actions commands fishing reel diagnostics log queue";
+        return "actions commands fishing reel diagnostics log queue keep release continue";
     if (std::strcmp(title, "Settings") == 0)
         return "settings hotkeys menu unload scale appearance";
     if (std::strcmp(title, "SDK") == 0)
@@ -131,7 +141,6 @@ void DrawHexMark(ImDrawList* drawList, const ImVec2& center, float radius, ImU32
 void DrawShellChrome(const ImVec2& windowPos, const ImVec2& windowSize, float rounding)
 {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const float topbarHeight = 42.0f;
 
     drawList->AddRectFilled(
         windowPos,
@@ -141,14 +150,14 @@ void DrawShellChrome(const ImVec2& windowPos, const ImVec2& windowSize, float ro
 
     drawList->AddRectFilled(
         windowPos,
-        ImVec2(windowPos.x + windowSize.x, windowPos.y + topbarHeight),
+        ImVec2(windowPos.x + windowSize.x, windowPos.y + kTopbarHeight),
         U32(0x1A1B1EFF),
         rounding,
         ImDrawFlags_RoundCornersTop);
 
     drawList->AddLine(
-        ImVec2(windowPos.x, windowPos.y + topbarHeight),
-        ImVec2(windowPos.x + windowSize.x, windowPos.y + topbarHeight),
+        ImVec2(windowPos.x, windowPos.y + kTopbarHeight),
+        ImVec2(windowPos.x + windowSize.x, windowPos.y + kTopbarHeight),
         U32(0x292A2EFF),
         1.0f);
 
@@ -173,7 +182,7 @@ void DrawBrand()
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     DrawHexMark(drawList, ImVec2(pos.x + 13.0f, pos.y + 13.0f), 10.0f, U32(0xFFB800FF), U32(0x7A3B1BFF));
     drawList->AddText(ImVec2(pos.x + 31.0f, pos.y + 5.0f), U32(0xF2C25AFF), "Byster");
-    ImGui::Dummy(ImVec2(92.0f, 28.0f));
+    ImGui::Dummy(ImVec2(kBrandWidth, kToolbarButtonSize));
 }
 
 bool TopTab(int id, const char* label, bool selected, const ImVec2& size)
@@ -203,15 +212,60 @@ bool TopTab(int id, const char* label, bool selected, const ImVec2& size)
     }
 
     DrawHexMark(drawList, ImVec2(pos.x + 14.0f, pos.y + size.y * 0.5f), 5.0f, selected ? U32(0xFFB800FF) : U32(0x5B5E66FF), U32(0x00000000));
-    drawList->AddText(ImVec2(pos.x + 26.0f, pos.y + 7.0f), text, label);
+    const ImVec4 textClip(pos.x + 24.0f, pos.y, max.x - 4.0f, max.y);
+    drawList->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        ImVec2(pos.x + 26.0f, pos.y + 7.0f),
+        text,
+        label,
+        nullptr,
+        0.0f,
+        &textClip);
     ImGui::PopID();
     return pressed;
 }
 
-bool ToolbarButton(const char* id, const char* label, const char* tooltip)
+enum class ToolIcon
+{
+    Collapse,
+    Settings,
+};
+
+void DrawToolIcon(ImDrawList* drawList, ToolIcon icon, const ImVec2& pos, const ImVec2& size, ImU32 color)
+{
+    const ImVec2 center(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f);
+
+    if (icon == ToolIcon::Collapse)
+    {
+        drawList->AddLine(
+            ImVec2(center.x - 4.5f, center.y + 2.0f),
+            ImVec2(center.x, center.y - 3.0f),
+            color,
+            1.7f);
+        drawList->AddLine(
+            ImVec2(center.x, center.y - 3.0f),
+            ImVec2(center.x + 4.5f, center.y + 2.0f),
+            color,
+            1.7f);
+        return;
+    }
+
+    drawList->AddCircle(center, 4.2f, color, 16, 1.5f);
+    drawList->AddLine(ImVec2(center.x - 8.0f, center.y), ImVec2(center.x - 5.8f, center.y), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x + 5.8f, center.y), ImVec2(center.x + 8.0f, center.y), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x, center.y - 8.0f), ImVec2(center.x, center.y - 5.8f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x, center.y + 5.8f), ImVec2(center.x, center.y + 8.0f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x - 5.8f, center.y - 5.8f), ImVec2(center.x - 4.2f, center.y - 4.2f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x + 4.2f, center.y + 4.2f), ImVec2(center.x + 5.8f, center.y + 5.8f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x + 5.8f, center.y - 5.8f), ImVec2(center.x + 4.2f, center.y - 4.2f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x - 4.2f, center.y + 4.2f), ImVec2(center.x - 5.8f, center.y + 5.8f), color, 1.5f);
+}
+
+bool ToolbarButton(const char* id, ToolIcon icon, const char* tooltip)
 {
     ImGui::PushID(id);
-    const ImVec2 size(28.0f, 28.0f);
+    const ImVec2 size(kToolbarButtonSize, kToolbarButtonSize);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     const bool pressed = ImGui::InvisibleButton("##tool", size);
     const bool hovered = ImGui::IsItemHovered();
@@ -219,12 +273,7 @@ bool ToolbarButton(const char* id, const char* label, const char* tooltip)
 
     drawList->AddRectFilled(pos, Add(pos, size), hovered ? U32(0x2C2D32FF) : U32(0x17181BFF), 2.0f);
     drawList->AddRect(pos, Add(pos, size), hovered ? U32(0xFFB80088) : U32(0x2A2B30FF), 2.0f, 0, 1.0f);
-
-    const ImVec2 textSize = ImGui::CalcTextSize(label);
-    drawList->AddText(
-        ImVec2(pos.x + (size.x - textSize.x) * 0.5f, pos.y + (size.y - textSize.y) * 0.5f),
-        hovered ? U32(0xFFD56BFF) : U32(0xA7ABB3FF),
-        label);
+    DrawToolIcon(drawList, icon, pos, size, hovered ? U32(0xFFD56BFF) : U32(0xA7ABB3FF));
 
     if (hovered && tooltip)
         ImGui::SetTooltip("%s", tooltip);
@@ -309,33 +358,40 @@ void Menu::Render()
         const ImVec2 windowSize = ImGui::GetWindowSize();
         DrawShellChrome(windowPos, windowSize, 6.0f);
 
-        ImGui::SetCursorPos(ImVec2(12.0f, 7.0f));
+        ImGui::SetCursorPos(ImVec2(12.0f, kTopbarY));
         DrawBrand();
 
         static char searchText[64]{};
-        if (windowSize.x >= 760.0f)
+        const float settingsX = windowSize.x - kWindowEdgePadding - kToolbarButtonSize;
+        const float collapseX = settingsX - kToolbarGap - kToolbarButtonSize;
+        const bool showSearch = windowSize.x >= 740.0f;
+        const float searchWidth = showSearch ? std::clamp(windowSize.x * 0.15f, 108.0f, 170.0f) : 0.0f;
+        const float searchX = collapseX - 8.0f - searchWidth;
+        const float navRight = (showSearch ? searchX : collapseX) - 12.0f;
+
+        if (showSearch)
         {
-            ImGui::SetCursorPos(ImVec2(windowSize.x - 158.0f, 8.0f));
+            ImGui::SetCursorPos(ImVec2(searchX, kToolbarY));
             ImGui::PushStyleColor(ImGuiCol_FrameBg, RGBA(0x101114FF));
             ImGui::PushStyleColor(ImGuiCol_Border, RGBA(0x26272CFF));
             ImGui::PushStyleColor(ImGuiCol_TextDisabled, RGBA(0x62656DFF));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
-            ImGui::SetNextItemWidth(108.0f);
+            ImGui::SetNextItemWidth(searchWidth);
             ImGui::InputTextWithHint("##byster_search", "Search", searchText, sizeof(searchText));
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(3);
-            ImGui::SameLine(0.0f, 8.0f);
-        }
-        else
-        {
-            ImGui::SetCursorPos(ImVec2(windowSize.x - 68.0f, 8.0f));
         }
 
-        ToolbarButton("collapse_hint", "^", "Menu hotkey: Insert");
-        ImGui::SameLine(0.0f, 6.0f);
-        if (ToolbarButton("settings_shortcut", "#", "Open Settings"))
+        ImGui::SetCursorPos(ImVec2(collapseX, kToolbarY));
+        if (ToolbarButton("collapse_hint", ToolIcon::Collapse, "Hide menu"))
+            Overlay::Get().SetMenuVisible(false);
+
+        ImGui::SetCursorPos(ImVec2(settingsX, kToolbarY));
+        if (ToolbarButton("settings_shortcut", ToolIcon::Settings, "Open Settings"))
         {
+            searchText[0] = '\0';
+
             for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
             {
                 ITab* tab = m_tabs[i].tab.get();
@@ -366,9 +422,8 @@ void Menu::Render()
                 m_selectedTab = firstSearchMatch;
         }
 
-        ImGui::SetCursorPos(ImVec2(106.0f, 7.0f));
-        const float rightReserve = windowSize.x >= 760.0f ? 188.0f : 76.0f;
-        const float navRight = windowSize.x - rightReserve;
+        ImGui::SetCursorPos(ImVec2(kNavStartX, kTopbarY));
+        bool drewNavTab = false;
         for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
         {
             ITab* tab = m_tabs[i].tab.get();
@@ -380,11 +435,13 @@ void Menu::Render()
             if (ImGui::GetCursorPosX() + tabWidth > navRight)
                 break;
 
+            if (drewNavTab)
+                ImGui::SameLine(0.0f, 2.0f);
+
             if (TopTab(i, title, i == m_selectedTab, ImVec2(tabWidth, 31.0f)))
                 m_selectedTab = i;
 
-            if (i + 1 < static_cast<int>(m_tabs.size()))
-                ImGui::SameLine(0.0f, 2.0f);
+            drewNavTab = true;
         }
 
         if (m_tabs.empty())

@@ -167,6 +167,13 @@ void ActionsTab::Render()
     ActionButton("Scan Fish", actions::Command::ScanFish, button_size);
 
     ImGui::Spacing();
+    ImGui::SeparatorText("Catch Result");
+    ActionButton("Keep Fish", actions::Command::KeepFish, button_size);
+    ImGui::SameLine(0.0f, gap);
+    ActionButton("Release Fish", actions::Command::ReleaseFish, button_size);
+    ActionButton("Continue Fishing", actions::Command::ContinueFishing, button_size);
+
+    ImGui::Spacing();
     ImGui::SeparatorText("Reel");
     ImGui::TextColored(
         status.auto_reel_enabled ? RGBA(0xFFB800FF) : RGBA(0x7F91A0FF),

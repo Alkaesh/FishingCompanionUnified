@@ -58,13 +58,15 @@ The built-in host shell now uses the `Byster` brand treatment: top navigation, c
 The default host menu registers only implemented sections:
 
 - `Dashboard`: live runtime/module/hotkey overview
-- `Actions`: action queue, command buttons, diagnostics, and event log
+- `Actions`: action queue, command buttons, catch result controls, diagnostics, and event log
 - `Settings`: implemented hotkeys and interface scale
 - `SDK`: module loader status and diagnostics
 
 Do not add visible controls for features that do not exist yet. Placeholder toggles such as radar, HUD visibility, or reminder settings should stay out of the default menu until the backing runtime exists.
 
 The top search box filters sections by title and keywords. Current useful searches include `actions`, `diagnostics`, `modules`, `sdk`, `hotkeys`, and `settings`.
+
+Topbar controls are right-aligned from the window edge: settings, collapse, then search. Do not place toolbar controls with fixed offsets from the left or with `SameLine` chains that can push the last button outside the menu. Toolbar buttons should perform a real action; decorative buttons are not allowed in the host shell.
 
 ## Layout Rules
 
