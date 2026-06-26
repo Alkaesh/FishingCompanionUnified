@@ -22,6 +22,9 @@ public:
 
     // Current unload virtual-key code.
     static int& UnloadKey();
+
+    // Current autonomous-fishing (AutoFish) toggle virtual-key code.
+    static int& AutoFishKey();
 };
 
 } // namespace fc

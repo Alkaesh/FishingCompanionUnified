@@ -9,10 +9,10 @@ This project is now split into build modules and ownership areas. Use this file 
 | `fc_entry` | `src/dllmain.cpp` | DLL attach/detach and main worker thread | `DllMain`, `MainThread` |
 | `fc_core` | `src/Core` | DX11 overlay hooks, input routing, shutdown lifecycle | `fc::Overlay`, `fc::Input` |
 | `fc_actions` | `src/Actions` | Runtime commands, action queue, diagnostics, sensor snapshots | `fc::actions::Start/Stop/Queue/GetStatus` |
-| `fc_features` | `src/Features` | UI-independent app features such as key binding | `fc::KeyBinder` |
-| `fc_gui` | `src/GUI` | Menu shell, built-in tabs, visual layout | `fc::Menu`, `fc::ITab` |
+| `fc_features` | `src/Features` | UI-independent app features: key binding and persistent settings | `fc::KeyBinder`, `fc::Settings` |
+| `fc_gui` | `src/GUI` | Menu shell, built-in tabs, shared host UI helpers and palette | `fc::Menu`, `fc::ITab`, `fc::gui::ui`, `fc::Palette` |
 | `fc_sdk` | `src/SDK` | External module ABI and lifecycle | `FCSDK_*`, `fc::sdk::ModuleLoader` |
-| `fc_third_party` | `third_party/imgui`, `third_party/minhook` | Vendored UI/hook dependencies | Do not edit unless upgrading vendor code |
+| `fc_third_party` | `third_party/imgui`, `third_party/minhook`, `third_party/json` | Vendored UI/hook/JSON dependencies | Do not edit unless upgrading vendor code |
 | `FishingCompanion` | composed DLL | Product DLL | links all modules |
 
 ## Non-DLL Modules

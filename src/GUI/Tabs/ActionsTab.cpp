@@ -1,56 +1,24 @@
 #include "ActionsTab.h"
 
+#include "../ActionsTable.h"
+#include "../UI.h"
 #include "../../Actions/ActionRuntime.h"
 #include "../../Core/Overlay.h"
-#include "../Menu.h"
 
 #include "imgui.h"
 
-#include <cctype>
 #include <cstring>
 #include <string>
 
+namespace ui = fc::gui::ui;
+
 namespace {
 
-ImVec4 RGBA(unsigned int hex)
-{
-    return ImVec4(
-        ((hex >> 24) & 0xFF) / 255.0f,
-        ((hex >> 16) & 0xFF) / 255.0f,
-        ((hex >> 8)  & 0xFF) / 255.0f,
-        ((hex)       & 0xFF) / 255.0f);
-}
-
-bool BeginCard(const char* id, const ImVec2& size)
-{
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, RGBA(0x121416F5));
-    ImGui::PushStyleColor(ImGuiCol_Border, RGBA(0x2B2C31FF));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 3.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(13.0f, 12.0f));
-
-#if IMGUI_VERSION_NUM >= 19000
-    return ImGui::BeginChild(
-        id,
-        size,
-        ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-#else
-    return ImGui::BeginChild(
-        id,
-        size,
-        true,
-        ImGuiWindowFlags_AlwaysUseWindowPadding |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse);
-#endif
-}
-
-void EndCard()
-{
-    ImGui::EndChild();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(2);
-}
+// Aliases for the palette colors used heavily in this tab.
+constexpr unsigned int kAmber    = fc::Palette::Amber;
+constexpr unsigned int kAmberHi  = fc::Palette::AmberHi;
+constexpr unsigned int kAmberSoft= fc::Palette::AmberSoft;
+constexpr unsigned int kMuted    = fc::Palette::TextMuted;
 
 std::string ButtonCaption(const char* label, const fc::actions::Status& status, bool enabled)
 {
@@ -108,249 +76,54 @@ bool ActionButton(
     return true;
 }
 
-enum class ActionStyle
+int PushActionStyle(fc::gui::ActionStyle style)
 {
-    Normal,
-    Primary,
-    Danger,
-};
-
-struct ActionSpec
-{
-    const char* label;
-    fc::actions::Command command;
-    const char* keywords;
-    ActionStyle style = ActionStyle::Normal;
-};
-
-constexpr ActionSpec kSearchActions[] = {
-    {"Refresh", fc::actions::Command::Refresh, "runtime status refresh update actions ready"},
-    {"Hitch", fc::actions::Command::Hitch, "fishing hitch"},
-    {"Start Hooking", fc::actions::Command::StartHooking, "fishing start_hooking hook"},
-    {"Alternative", fc::actions::Command::AlternativeAction, "fishing alternative alt action"},
-    {"Podsak", fc::actions::Command::TogglePodsak, "fishing podsak toggle_podsak"},
-    {"Toggle Reel", fc::actions::Command::ToggleReel, "fishing reel toggle_reel"},
-    {"Set Toggle Reel", fc::actions::Command::FishingSetToggleReel, "fishing set toggle reel"},
-    {"Cut Line", fc::actions::Command::CutFishingLine, "fishing cut line cut_fishing_line"},
-    {"Return Idle", fc::actions::Command::ReturnIdle, "fishing return idle return_idle"},
-    {"Switch Throw Mode", fc::actions::Command::SwitchThrowMode, "fishing throw mode switch"},
-    {"Change Distance", fc::actions::Command::ChangeThrowDistance, "fishing throw distance change"},
-    {"Set Clip", fc::actions::Command::FishingSetClip, "fishing set clip"},
-    {"Rig Clip", fc::actions::Command::RigClip, "fishing rig clip"},
-    {"Bait 1", fc::actions::Command::HotSwapBait1, "fishing bait hotswap hot swap 1"},
-    {"Bait 2", fc::actions::Command::HotSwapBait2, "fishing bait hotswap hot swap 2"},
-    {"Bobber Depth", fc::actions::Command::ChangeBobberDepth, "fishing bobber depth"},
-    {"Rod Rest", fc::actions::Command::RodToRodrest, "fishing rod rest rodrest"},
-    {"Rod Slot", fc::actions::Command::RodSlot, "fishing rod slot"},
-    {"Hand HotSwap", fc::actions::Command::HandItemHotSwap, "fishing hand item hotswap hot swap"},
-    {"Auto Cast", fc::actions::Command::AutoCast, "auto cast autocast", ActionStyle::Primary},
-    {"Auto Catch", fc::actions::Command::AutoCatch, "auto catch autocatch", ActionStyle::Primary},
-    {"Auto Scout", fc::actions::Command::AutoScout, "auto scout autoscout scout_cast", ActionStyle::Primary},
-    {"Stop All", fc::actions::Command::StopAll, "stop all cancel halt", ActionStyle::Danger},
-    {"Mark Spot", fc::actions::Command::MarkSpot, "mark spot"},
-    {"Clear Spot", fc::actions::Command::ClearSpot, "clear spot"},
-    {"Scan Fish", fc::actions::Command::ScanFish, "scan fish fish_scan"},
-    {"Keep Fish", fc::actions::Command::KeepFish, "keep fish catch result"},
-    {"Release Fish", fc::actions::Command::ReleaseFish, "release fish catch result"},
-    {"Continue Fishing", fc::actions::Command::ContinueFishing, "continue fishing keep and cast keep_and_cast"},
-    {"Manual Roll", fc::actions::Command::ManualRoll, "reel manual roll"},
-    {"Roll Boost", fc::actions::Command::ManualRollBoost, "reel manual roll boost"},
-    {"Toggle Auto Reel", fc::actions::Command::ToggleAutoReel, "reel auto reel toggle start stop"},
-    {"Auto Roll", fc::actions::Command::ToggleAutoRollMode, "reel auto roll mode"},
-    {"Reset Auto", fc::actions::Command::ResetAutoRollMode, "reel reset auto roll"},
-    {"Switch Speed", fc::actions::Command::SwitchReelSpeed, "reel switch speed"},
-    {"Change Speed", fc::actions::Command::ChangeRollSpeed, "reel change speed"},
-    {"Friction", fc::actions::Command::ChangeFriction, "reel friction"},
-    {"Speed Mode", fc::actions::Command::RollSpeedMode, "reel speed mode"},
-    {"Transmission", fc::actions::Command::ChangeTransmissionMode, "reel transmission mode"},
-    {"Engine", fc::actions::Command::ToggleEngine, "reel engine"},
-    {"Toggle Gearbox", fc::actions::Command::ToggleTransmission, "reel gearbox transmission"},
-    {"Catch Fish", fc::actions::Command::DebugCatchFish, "sandbox debug catch fish"},
-    {"Repair Rod", fc::actions::Command::DebugRepairRod, "sandbox debug repair rod"},
-    {"Spawn Fish", fc::actions::Command::DebugSpawnFish, "sandbox debug spawn fish"},
-    {"Fish Jump", fc::actions::Command::DebugFishJump, "sandbox debug fish jump"},
-    {"Level Up", fc::actions::Command::DebugLevelUp, "sandbox debug level up"},
-    {"Debug Hitch", fc::actions::Command::DebugHitch, "sandbox debug hitch"},
-    {"Snapshot", fc::actions::Command::SnapshotDiagnostics, "diagnostics snapshot"},
-    {"Toggle Diagnostics", fc::actions::Command::ToggleDiagnostics, "diagnostics log start stop"},
-};
-
-bool ContainsNoCase(const char* haystack, const char* needle)
-{
-    if (!needle || needle[0] == '\0')
-        return true;
-    if (!haystack)
-        return false;
-
-    for (const char* start = haystack; *start; ++start)
-    {
-        const char* h = start;
-        const char* n = needle;
-        while (*h && *n &&
-               std::tolower(static_cast<unsigned char>(*h)) ==
-               std::tolower(static_cast<unsigned char>(*n)))
-        {
-            ++h;
-            ++n;
-        }
-
-        if (*n == '\0')
-            return true;
-    }
-
-    return false;
-}
-
-bool ActionMatches(const ActionSpec& action, const char* query)
-{
-    return ContainsNoCase(action.label, query) || ContainsNoCase(action.keywords, query);
-}
-
-bool CanRunWhenNotReady(fc::actions::Command command)
-{
-    switch (command)
-    {
-    case fc::actions::Command::Refresh:
-    case fc::actions::Command::StopAll:
-    case fc::actions::Command::SnapshotDiagnostics:
-    case fc::actions::Command::ToggleDiagnostics:
-        return true;
-    default:
-        return false;
-    }
-}
-
-size_t FindNoCase(const char* haystack, const char* needle)
-{
-    if (!needle || needle[0] == '\0' || !haystack)
-        return std::string::npos;
-
-    for (size_t start = 0; haystack[start] != '\0'; ++start)
-    {
-        size_t h = start;
-        const char* n = needle;
-        while (haystack[h] && *n &&
-               std::tolower(static_cast<unsigned char>(haystack[h])) ==
-               std::tolower(static_cast<unsigned char>(*n)))
-        {
-            ++h;
-            ++n;
-        }
-
-        if (*n == '\0')
-            return start;
-    }
-
-    return std::string::npos;
-}
-
-void HighlightLabel(const char* label, const char* query)
-{
-    const size_t match = FindNoCase(label, query);
-    if (match == std::string::npos)
-    {
-        ImGui::TextColored(RGBA(0x7F91A0FF), "%s", label);
-        return;
-    }
-
-    const std::string text(label);
-    const size_t length = std::strlen(query);
-    const std::string before = text.substr(0, match);
-    const std::string selected = text.substr(match, length);
-    const std::string after = text.substr(match + length);
-
-    ImGui::TextColored(RGBA(0x7F91A0FF), "match:");
-    ImGui::SameLine();
-    if (!before.empty())
-    {
-        ImGui::TextColored(RGBA(0xB9BBC0FF), "%s", before.c_str());
-        ImGui::SameLine(0.0f, 0.0f);
-    }
-
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
-    const ImVec2 textSize = ImGui::CalcTextSize(selected.c_str());
-    ImGui::GetWindowDrawList()->AddRectFilled(
-        ImVec2(pos.x - 2.0f, pos.y),
-        ImVec2(pos.x + textSize.x + 2.0f, pos.y + textSize.y),
-        ImGui::ColorConvertFloat4ToU32(RGBA(0xFFB800CC)),
-        2.0f);
-    ImGui::TextColored(RGBA(0x121315FF), "%s", selected.c_str());
-
-    if (!after.empty())
-    {
-        ImGui::SameLine(0.0f, 0.0f);
-        ImGui::TextColored(RGBA(0xB9BBC0FF), "%s", after.c_str());
-    }
-}
-
-int PushActionStyle(ActionStyle style)
-{
+    using namespace fc::gui;
     if (style == ActionStyle::Primary)
     {
-        ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x3A2B10FF));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x5A3D0BFF));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0xFFB800FF));
+        ImGui::PushStyleColor(ImGuiCol_Button, fc::Color(0x3A2B10FF));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, fc::Color(0x5A3D0BFF));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, fc::Color(kAmber));
         return 3;
     }
 
     if (style == ActionStyle::Danger)
     {
-        ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x6A2430FF));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x8A3142FF));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0xC24A5CFF));
+        ImGui::PushStyleColor(ImGuiCol_Button, fc::Color(0x6A2430FF));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, fc::Color(0x8A3142FF));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, fc::Color(0xC24A5CFF));
         return 3;
     }
 
     return 0;
 }
 
-bool StyledActionButton(const ActionSpec& action, const ImVec2& size, const fc::actions::Status& status)
+bool StyledActionButton(const fc::gui::ActionSpec& action, const ImVec2& size, const fc::actions::Status& status)
 {
     const int pushed = PushActionStyle(action.style);
-    const bool pressed = ActionButton(action.label, action.command, size, status, CanRunWhenNotReady(action.command));
+    const bool pressed = ActionButton(
+        action.label, action.command, size, status,
+        fc::gui::CanRunWhenNotReady(action.command));
     if (pushed > 0)
         ImGui::PopStyleColor(pushed);
     return pressed;
 }
 
-bool HasSearchResult(const char* query)
+// The dynamic caption shown on a command button (e.g. "Stop Auto Reel").
+// Returns action.label for commands with a fixed caption.
+const char* DynamicLabel(const fc::gui::ActionSpec& action, const fc::actions::Status& status)
 {
-    for (const ActionSpec& action : kSearchActions)
+    switch (action.command)
     {
-        if (ActionMatches(action, query))
-            return true;
+    case fc::actions::Command::ToggleAutoReel:
+        return status.auto_reel_enabled ? "Stop Auto Reel" : "Start Auto Reel";
+    case fc::actions::Command::ToggleAutoFish:
+        return status.auto_fish_enabled ? "Stop Auto Fish" : "Start Auto Fish";
+    case fc::actions::Command::ToggleDiagnostics:
+        return status.diagnostics_enabled ? "Stop Log" : "Start Log";
+    default:
+        return action.label;
     }
-
-    return false;
-}
-
-void RenderSearchResults(
-    const char* query,
-    const ImVec2& buttonSize,
-    float gap,
-    const fc::actions::Status& status)
-{
-    ImGui::Spacing();
-    ImGui::SeparatorText("Search Results");
-
-    int shown = 0;
-    for (const ActionSpec& action : kSearchActions)
-    {
-        if (!ActionMatches(action, query))
-            continue;
-
-        if ((shown % 2) == 1)
-            ImGui::SameLine(0.0f, gap);
-
-        ImGui::BeginGroup();
-        HighlightLabel(action.label, query);
-        StyledActionButton(action, buttonSize, status);
-        ImGui::EndGroup();
-        ++shown;
-    }
-
-    if (shown == 0)
-        ImGui::TextColored(RGBA(0x7F91A0FF), "No action buttons matched this search.");
 }
 
 } // namespace
@@ -369,17 +142,17 @@ const char* ActionsTab::SearchKeywords() const
 void ActionsTab::Render()
 {
     const actions::Status status = actions::GetStatus();
-    const ImVec4 state_color = status.ready ? RGBA(0xFFB800FF) : RGBA(0xFFCF66FF);
+    const ImVec4 state_color = status.ready ? fc::Color(kAmber) : fc::Color(kAmberSoft);
     const char* runtime_state = status.busy ? "busy" : (status.ready ? "ready" : "waiting");
 
     ImGui::SeparatorText("Runtime");
 
     bool refresh_requested = false;
-    if (BeginCard("##runtime_status", ImVec2(0.0f, 156.0f)))
+    if (ui::BeginStatCard("##runtime_status", ImVec2(0.0f, 156.0f)))
     {
         ImGui::TextColored(state_color, "%s", runtime_state);
         ImGui::SameLine();
-        ImGui::TextColored(RGBA(0x7F91A0FF), "queued: %u", status.queued);
+        ImGui::TextColored(fc::Color(kMuted), "queued: %u", status.queued);
         const float refreshX = ImGui::GetWindowContentRegionMax().x - 112.0f;
         if (refreshX > ImGui::GetCursorPosX() + 8.0f)
             ImGui::SameLine(refreshX);
@@ -397,14 +170,14 @@ void ActionsTab::Render()
 
         if (!status.last_command.empty())
             ImGui::TextColored(
-                status.last_effect_confirmed ? RGBA(0xFFB800FF) : RGBA(0xFFCF66FF),
+                status.last_effect_confirmed ? fc::Color(kAmber) : fc::Color(kAmberSoft),
                 "last: %s / %s",
                 status.last_command.c_str(),
                 status.last_result.c_str());
         if (!status.last_observation.empty())
             ImGui::TextWrapped("observed: %s", status.last_observation.c_str());
     }
-    EndCard();
+    ui::EndCard();
 
     if (refresh_requested)
         return;
@@ -412,141 +185,88 @@ void ActionsTab::Render()
     const float gap = 10.0f;
     const float width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
     const ImVec2 button_size(width, 36.0f);
-    const char* query = Menu::Get().SearchText();
-    auto actionButton = [&](const char* label, actions::Command command, bool allowWhenNotReady = false) {
-        return ActionButton(label, command, button_size, status, allowWhenNotReady);
+
+    // Button grid, grouped. Contextual status lines are kept inline exactly as
+    // in the previous hand-written layout (reel/auto-reel + diagnostics).
+    auto runButton = [&](const fc::gui::ActionSpec& action) {
+        const int pushed = PushActionStyle(action.style);
+        const bool ok = ActionButton(
+            DynamicLabel(action, status), action.command, button_size, status,
+            fc::gui::CanRunWhenNotReady(action.command));
+        if (pushed > 0)
+            ImGui::PopStyleColor(pushed);
+        return ok;
     };
 
-    if (Menu::Get().HasSearchText() && HasSearchResult(query))
-    {
-        RenderSearchResults(query, button_size, gap, status);
-        return;
-    }
+    // Render every action in a group as a two-column button grid.
+    auto renderGroup = [&](fc::gui::ActionGroup group) {
+        bool firstInRow = true;
+        for (const fc::gui::ActionSpec& action : fc::gui::kActions)
+        {
+            if (action.group != group)
+                continue;
 
+            if (!firstInRow)
+                ImGui::SameLine(0.0f, gap);
+            runButton(action);
+            firstInRow = !firstInRow;
+        }
+    };
+
+    using AG = fc::gui::ActionGroup;
+
+    // -- Fishing --------------------------------------------------------
     ImGui::Spacing();
-    ImGui::SeparatorText("Fishing");
+    ImGui::SeparatorText(fc::gui::GroupTitle(AG::Fishing));
+    renderGroup(AG::Fishing);
 
-    actionButton("Hitch", actions::Command::Hitch);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Start Hooking", actions::Command::StartHooking);
-
-    actionButton("Alternative", actions::Command::AlternativeAction);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Podsak", actions::Command::TogglePodsak);
-
-    actionButton("Toggle Reel", actions::Command::ToggleReel);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Set Toggle Reel", actions::Command::FishingSetToggleReel);
-
-    actionButton("Cut Line", actions::Command::CutFishingLine);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Return Idle", actions::Command::ReturnIdle);
-
-    actionButton("Switch Throw Mode", actions::Command::SwitchThrowMode);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Change Distance", actions::Command::ChangeThrowDistance);
-
-    actionButton("Set Clip", actions::Command::FishingSetClip);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Rig Clip", actions::Command::RigClip);
-
-    actionButton("Bait 1", actions::Command::HotSwapBait1);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Bait 2", actions::Command::HotSwapBait2);
-
-    actionButton("Bobber Depth", actions::Command::ChangeBobberDepth);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Rod Rest", actions::Command::RodToRodrest);
-
-    actionButton("Rod Slot", actions::Command::RodSlot);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Hand HotSwap", actions::Command::HandItemHotSwap);
-
+    // -- Automation -----------------------------------------------------
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x3A2B10FF));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x5A3D0BFF));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0xFFB800FF));
-    actionButton("Auto Cast", actions::Command::AutoCast);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Auto Catch", actions::Command::AutoCatch);
-    actionButton("Auto Scout", actions::Command::AutoScout);
-    ImGui::PopStyleColor(3);
-
-    ImGui::SameLine(0.0f, gap);
-    ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x6A2430FF));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x8A3142FF));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0xC24A5CFF));
-    actionButton("Stop All", actions::Command::StopAll, true);
-    ImGui::PopStyleColor(3);
-
-    actionButton("Mark Spot", actions::Command::MarkSpot);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Clear Spot", actions::Command::ClearSpot);
-    actionButton("Scan Fish", actions::Command::ScanFish);
-
-    ImGui::Spacing();
-    ImGui::SeparatorText("Catch Result");
-    actionButton("Keep Fish", actions::Command::KeepFish);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Release Fish", actions::Command::ReleaseFish);
-    actionButton("Continue Fishing", actions::Command::ContinueFishing);
-
-    ImGui::Spacing();
-    ImGui::SeparatorText("Reel");
+    ImGui::SeparatorText(fc::gui::GroupTitle(AG::Auto));
     ImGui::TextColored(
-        status.auto_reel_enabled ? RGBA(0xFFB800FF) : RGBA(0x7F91A0FF),
+        status.auto_fish_enabled ? fc::Color(kAmber) : fc::Color(kMuted),
+        "auto fish: %s / state: %s / rod in hand: %s / cycles: %llu / load: %.2f",
+        status.auto_fish_enabled ? "on" : "off",
+        status.auto_fish_state.empty() ? "-" : status.auto_fish_state.c_str(),
+        status.auto_fish_rod_in_hand ? "yes" : "NO",
+        status.auto_fish_cycles,
+        status.auto_fish_rod_load);
+    renderGroup(AG::Auto);
+
+    // -- Spots & Scan ---------------------------------------------------
+    ImGui::Spacing();
+    ImGui::SeparatorText(fc::gui::GroupTitle(AG::Spots));
+    renderGroup(AG::Spots);
+
+    // -- Catch Result ---------------------------------------------------
+    ImGui::Spacing();
+    ImGui::SeparatorText(fc::gui::GroupTitle(AG::CatchResult));
+    renderGroup(AG::CatchResult);
+
+    // -- Reel (with the contextual auto-reel status line) ---------------
+    ImGui::Spacing();
+    ImGui::SeparatorText(fc::gui::GroupTitle(AG::Reel));
+    ImGui::TextColored(
+        status.auto_reel_enabled ? fc::Color(kAmber) : fc::Color(kMuted),
         "auto reel: %s / ticks: %llu",
         status.auto_reel_enabled ? "on" : "off",
         status.auto_reel_ticks);
+    renderGroup(AG::Reel);
 
-    actionButton("Manual Roll", actions::Command::ManualRoll);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Roll Boost", actions::Command::ManualRollBoost);
-
-    actionButton(
-        status.auto_reel_enabled ? "Stop Auto Reel" : "Start Auto Reel",
-        actions::Command::ToggleAutoReel);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Auto Roll", actions::Command::ToggleAutoRollMode);
-
-    actionButton("Reset Auto", actions::Command::ResetAutoRollMode);
-
-    actionButton("Switch Speed", actions::Command::SwitchReelSpeed);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Change Speed", actions::Command::ChangeRollSpeed);
-
-    actionButton("Friction", actions::Command::ChangeFriction);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Speed Mode", actions::Command::RollSpeedMode);
-
-    actionButton("Transmission", actions::Command::ChangeTransmissionMode);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Engine", actions::Command::ToggleEngine);
-
-    actionButton("Toggle Gearbox", actions::Command::ToggleTransmission);
-
+    // -- Sandbox Debug --------------------------------------------------
     ImGui::Spacing();
-    ImGui::SeparatorText("Sandbox Debug");
-    actionButton("Catch Fish", actions::Command::DebugCatchFish);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Repair Rod", actions::Command::DebugRepairRod);
+    ImGui::SeparatorText(fc::gui::GroupTitle(AG::Sandbox));
+    renderGroup(AG::Sandbox);
 
-    actionButton("Spawn Fish", actions::Command::DebugSpawnFish);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Fish Jump", actions::Command::DebugFishJump);
-
-    actionButton("Level Up", actions::Command::DebugLevelUp);
-    ImGui::SameLine(0.0f, gap);
-    actionButton("Debug Hitch", actions::Command::DebugHitch);
-
+    // -- Diagnostics (with contextual preamble) -------------------------
     ImGui::Spacing();
-    ImGui::SeparatorText("Diagnostics");
+    ImGui::SeparatorText(fc::gui::GroupTitle(AG::Diagnostics));
     ImGui::TextColored(
-        status.last_effect_confirmed ? RGBA(0xFFB800FF) : RGBA(0xFFCF66FF),
+        status.last_effect_confirmed ? fc::Color(kAmber) : fc::Color(kAmberSoft),
         "Observed in game: %s",
         status.last_effect_confirmed ? "confirmed" : "not confirmed");
     ImGui::TextColored(
-        status.diagnostics_enabled ? RGBA(0xFFB800FF) : RGBA(0x7F91A0FF),
+        status.diagnostics_enabled ? fc::Color(kAmber) : fc::Color(kMuted),
         "log: %s / snapshots: %llu",
         status.diagnostics_enabled ? "on" : "off",
         status.diagnostic_snapshots);
@@ -556,20 +276,30 @@ void ActionsTab::Render()
     if (!status.sensor_summary.empty())
         ImGui::TextWrapped("%s", status.sensor_summary.c_str());
 
-    actionButton("Snapshot", actions::Command::SnapshotDiagnostics, true);
-    ImGui::SameLine(0.0f, gap);
-    actionButton(
-        status.diagnostics_enabled ? "Stop Log" : "Start Log",
-        actions::Command::ToggleDiagnostics,
-        true);
+    {
+        const fc::gui::ActionSpec* group[8];
+        size_t n = 0;
+        for (const auto& a : fc::gui::kActions)
+            if (a.group == AG::Diagnostics && n < 8)
+                group[n++] = &a;
 
+        // Snapshot | Toggle Diagnostics, each allowed when not ready.
+        for (size_t i = 0; i < n; ++i)
+        {
+            runButton(*group[i]);
+            if ((i % 2) == 0 && i + 1 < n)
+                ImGui::SameLine(0.0f, gap);
+        }
+    }
+
+    // -- Event Log ------------------------------------------------------
     ImGui::Spacing();
     ImGui::SeparatorText("Event Log");
-    if (BeginCard("##action_event_log", ImVec2(0.0f, 172.0f)))
+    if (ui::BeginCard("##action_event_log", ImVec2(0.0f, 172.0f)))
     {
         if (status.recent_events.empty())
         {
-            ImGui::TextColored(RGBA(0x7F91A0FF), "No runtime events yet.");
+            ImGui::TextColored(fc::Color(kMuted), "No runtime events yet.");
         }
         else
         {
@@ -578,7 +308,7 @@ void ActionsTab::Render()
                 for (size_t i = status.recent_events.size(); i > 0; --i)
                 {
                     const std::string& event = status.recent_events[i - 1];
-                    ImGui::TextColored(RGBA(0x6F8190FF), "%02llu", static_cast<unsigned long long>(i));
+                    ImGui::TextColored(fc::Color(fc::Palette::TextDim), "%02llu", static_cast<unsigned long long>(i));
                     ImGui::SameLine();
                     ImGui::TextWrapped("%s", event.c_str());
                 }
@@ -586,7 +316,7 @@ void ActionsTab::Render()
             ImGui::EndChild();
         }
     }
-    EndCard();
+    ui::EndCard();
 }
 
 } // namespace fc

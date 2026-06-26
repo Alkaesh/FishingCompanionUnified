@@ -3,85 +3,26 @@
 // ============================================================================
 
 #include "SdkTab.h"
+#include "../UI.h"
 #include "../../SDK/FCSDK.h"
 #include "../../SDK/ModuleLoader.h"
 
 #include "imgui.h"
 
 #include <cstdio>
-#include <string>
 #include <vector>
 
+namespace ui = fc::gui::ui;
+
 namespace {
-
-ImVec4 RGBA(unsigned int hex)
-{
-    return ImVec4(
-        ((hex >> 24) & 0xFF) / 255.0f,
-        ((hex >> 16) & 0xFF) / 255.0f,
-        ((hex >> 8)  & 0xFF) / 255.0f,
-        ((hex)       & 0xFF) / 255.0f);
-}
-
-bool BeginCard(const char* id, const ImVec2& size)
-{
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, RGBA(0x121416F5));
-    ImGui::PushStyleColor(ImGuiCol_Border, RGBA(0x2B2C31FF));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 3.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(13.0f, 12.0f));
-
-#if IMGUI_VERSION_NUM >= 19000
-    return ImGui::BeginChild(
-        id,
-        size,
-        ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-#else
-    return ImGui::BeginChild(
-        id,
-        size,
-        true,
-        ImGuiWindowFlags_AlwaysUseWindowPadding |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse);
-#endif
-}
-
-void EndCard()
-{
-    ImGui::EndChild();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(2);
-}
-
-void StatusLine(const char* label, const char* value, const ImVec4& color)
-{
-    ImGui::TextColored(RGBA(0x7F91A0FF), "%s", label);
-    ImGui::SameLine(180.0f);
-    ImGui::TextColored(color, "%s", value);
-}
-
-std::string Narrow(const std::wstring& value)
-{
-    if (value.empty())
-        return {};
-
-    const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 1)
-        return {};
-
-    std::string result(static_cast<size_t>(size - 1), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), size, nullptr, nullptr);
-    return result;
-}
 
 ImVec4 EventColor(const std::string& level)
 {
     if (level == "error")
-        return RGBA(0xFF7A66FF);
+        return fc::Color(fc::Palette::Coral);
     if (level == "warn")
-        return RGBA(0xFFCF66FF);
-    return RGBA(0xFFB800FF);
+        return fc::Color(fc::Palette::AmberSoft);
+    return fc::Color(fc::Palette::Amber);
 }
 
 } // namespace
@@ -113,41 +54,43 @@ void SdkTab::Render()
 
     ImGui::SeparatorText("SDK Console");
 
-    if (BeginCard("##sdk_status", ImVec2(0.0f, 150.0f)))
+    if (ui::BeginCard("##sdk_status", ImVec2(0.0f, 150.0f)))
     {
-        const std::string modsPath = Narrow(loader.ModsDirectory());
+        const std::string modsPath = ui::Narrow(loader.ModsDirectory());
 
-        StatusLine("Version", FCSDK_GetVersionString(), RGBA(0xFFB800FF));
-        StatusLine("ABI", "C exports + C++ helpers", RGBA(0xFFCF66FF));
-        StatusLine("ImGui", FCSDK_GetImGuiVersion(), RGBA(0xFFD56BFF));
-        StatusLine("Modules", modulesSummary, failedCount > 0 ? RGBA(0xFF7A66FF) : RGBA(0xFFB800FF));
-        StatusLine("Mods", modsPath.empty() ? "mods/" : modsPath.c_str(), RGBA(0xFF7A66FF));
+        // SDK uses a wider label column than the default 156.
+        constexpr float kLabelW = 180.0f;
+        ui::StatusLine("Version", FCSDK_GetVersionString(), Color(Palette::Amber), kLabelW);
+        ui::StatusLine("ABI", "C exports + C++ helpers", Color(Palette::AmberSoft), kLabelW);
+        ui::StatusLine("ImGui", FCSDK_GetImGuiVersion(), Color(Palette::AmberHi), kLabelW);
+        ui::StatusLine("Modules", modulesSummary, failedCount > 0 ? Color(Palette::Coral) : Color(Palette::Amber), kLabelW);
+        ui::StatusLine("Mods", modsPath.empty() ? "mods/" : modsPath.c_str(), Color(Palette::Coral), kLabelW);
     }
-    EndCard();
+    ui::EndCard();
 
     ImGui::Spacing();
     ImGui::SeparatorText("Module Quickstart");
 
-    if (BeginCard("##sdk_quickstart", ImVec2(0.0f, 178.0f)))
+    if (ui::BeginCard("##sdk_quickstart", ImVec2(0.0f, 178.0f)))
     {
         ImGui::TextWrapped("Include src/SDK/FCSDK.h, fill FCSDK_TabDesc, and call FCSDK_RegisterTab(). "
                            "The render callback runs inside the active host ImGui frame, so a module can draw "
                            "its controls directly or use helpers from FCSDK_UI.h.");
         ImGui::Spacing();
-        ImGui::TextColored(RGBA(0x7F91A0FF), "Minimal flow");
+        ImGui::TextColored(Color(Palette::TextMuted), "Minimal flow");
         ImGui::BulletText("include FCSDK.h");
         ImGui::BulletText("implement void Render(void*)");
         ImGui::BulletText("call FCSDK_RegisterTab(&desc)");
     }
-    EndCard();
+    ui::EndCard();
 
     ImGui::Spacing();
     ImGui::SeparatorText("Loaded Modules");
-    if (BeginCard("##sdk_modules", ImVec2(0.0f, 190.0f)))
+    if (ui::BeginCard("##sdk_modules", ImVec2(0.0f, 190.0f)))
     {
         if (moduleRecords.empty())
         {
-            ImGui::TextColored(RGBA(0x7F91A0FF), "No external modules loaded yet.");
+            ImGui::TextColored(Color(Palette::TextMuted), "No external modules loaded yet.");
         }
         else if (ImGui::BeginTable(
             "##sdk_modules_table",
@@ -164,11 +107,11 @@ void SdkTab::Render()
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::TextColored(
-                    record.loaded ? RGBA(0xFFB800FF) : RGBA(0xFF7A66FF),
+                    record.loaded ? Color(Palette::Amber) : Color(Palette::Coral),
                     "%s",
                     record.loaded ? "loaded" : "failed");
                 ImGui::TableNextColumn();
-                ImGui::TextWrapped("%s", Narrow(record.name).c_str());
+                ImGui::TextWrapped("%s", ui::Narrow(record.name).c_str());
                 ImGui::TableNextColumn();
                 ImGui::TextWrapped("%s", record.detail.c_str());
             }
@@ -176,15 +119,15 @@ void SdkTab::Render()
             ImGui::EndTable();
         }
     }
-    EndCard();
+    ui::EndCard();
 
     ImGui::Spacing();
     ImGui::SeparatorText("Loader Events");
-    if (BeginCard("##sdk_loader_events", ImVec2(0.0f, 170.0f)))
+    if (ui::BeginCard("##sdk_loader_events", ImVec2(0.0f, 170.0f)))
     {
         if (events.empty())
         {
-            ImGui::TextColored(RGBA(0x7F91A0FF), "No loader events yet.");
+            ImGui::TextColored(Color(Palette::TextMuted), "No loader events yet.");
         }
         else
         {
@@ -201,10 +144,10 @@ void SdkTab::Render()
             ImGui::EndChild();
         }
     }
-    EndCard();
+    ui::EndCard();
 
     ImGui::Spacing();
-    ImGui::TextColored(RGBA(0x7F91A0FF), "Safety scope: UI, overlays, allowed data sources. No anti-cheat bypass helpers.");
+    ImGui::TextColored(Color(Palette::TextMuted), "Safety scope: UI, overlays, allowed data sources. No anti-cheat bypass helpers.");
 }
 
 } // namespace fc

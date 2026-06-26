@@ -94,23 +94,28 @@ When adding built-in labels:
 - avoid mixing Russian and English inside the same built-in panel
 - add a dedicated localization layer before reintroducing translated host UI copy
 
-## Built-in Diagnostics Panels
+## Host UI Internals (built-in shell only)
 
-The host has two built-in diagnostic surfaces that should stay compact and readable:
+The built-in host tabs share their helpers and palette from two internal headers (not part of the SDK ABI). External modules keep using `fc::sdk::ui` from `FCSDK_UI.h`; the host shell uses these:
 
-- `Actions` / `Runtime`: current action runtime state, queue count, last command result, and newest runtime events from `fc::actions::Status::recent_events`.
-- `Logs`: merged runtime events and SDK loader events with `info`, `warn`, and `error` filters.
-- `Health`: quick operational checks for runtime readiness, queue depth, SDK scan status, module failures, and event counts.
-- `SDK` / `Loaded Modules` and `Loader Events`: module load results and host-side SDK loader events from `fc::sdk::ModuleLoader`.
+- `src/GUI/Theme.h` - `fc::Palette` is the single source of host colors (RGBA hex `0xRRGGBBAA`), plus `fc::Color(hex)` / `fc::ColorU32(hex)` converters. Do not inline a hex literal in a host tab - reference a `Palette::*` constant.
+- `src/GUI/UI.h` - `fc::gui::ui` with `BeginCard/EndCard`, `BeginStatCard`, `Metric`, `StatusLine`, `WrappedStatusLine`, `Narrow`, `ProcessDirectory`/`ProcessDirectoryW`, and the case-insensitive `ContainsNoCase` / `FindNoCase` / `HighlightText` / `HighlightLabel` text helpers.
+- `src/GUI/ActionsTable.h` - the data-driven action catalog (`kActions[]`, grouped by `ActionGroup`) that drives both the Actions button grid and the top search results. Add or remove a command here only.
 
-When adding new runtime or loader events, keep messages short and actionable. Prefer:
+The host palette (amber/graphite) and the SDK palette (cyan/blue, `FCSDK_UI.h`) are intentionally separate. External SDK modules render in their own palette so a module never has to depend on host internals. Do not merge the two without a deliberate design decision.
 
-```text
-queued: auto_cast
-example_mod.dll: missing FCSDK_ModuleInit export
-```
+## Persistent Settings
 
-Avoid long per-frame spam in these UI logs. High-frequency details should remain in file logs or diagnostics snapshots.
+User settings (hotkeys and interface scale) are persisted by `fc::Settings` (`src/Features/Settings.h`) as `FishingCompanion_settings.json` next to the host process exe:
+
+- `Menu::RegisterDefaultTabs()` loads and applies settings once before the first render.
+- `SettingsTab` writes through `Settings::Set*()`; `Menu::Render()` flushes dirty changes once per frame via `Settings::SaveIfDirty()`.
+
+Hotkeys remain a single virtual-key code (no modifier combos), because `fc::Input` in `fc_core` parses one VK. Adding combos is a core-layer change, not a GUI one.
+
+## Keyboard Navigation
+
+The top section tabs also respond to arrow left/right, in addition to the mouse. The custom `TopTab` control uses `ImGui::InvisibleButton` and does not capture ImGui nav, so `Menu::Render()` drives the cycle manually. Pressing an arrow clears the search box.
 
 ## Minimal Styled Tab
 

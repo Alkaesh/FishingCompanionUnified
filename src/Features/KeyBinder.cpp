@@ -7,10 +7,14 @@
 #include <Windows.h>
 #include "imgui.h"
 
+#include <cstdio>
+
 namespace fc {
 
 const char* KeyBinder::KeyName(int vk)
 {
+    // Static buffer so we can return a const char* by value; rendering is
+    // single-threaded (Present hook), so this is not shared concurrently.
     static char name[32];
 
     if (vk == 0)
@@ -54,7 +58,7 @@ const char* KeyBinder::KeyName(int vk)
     case VK_LMENU:    return "LAlt";
     case VK_RMENU:    return "RAlt";
     default:
-        wsprintfA(name, "VK_0x%02X", vk);
+        std::snprintf(name, sizeof(name), "VK_0x%02X", vk);
         return name;
     }
 }
@@ -76,7 +80,10 @@ bool KeyBinder::Draw(const char* label, int* outKey)
     if (availableWidth >= 340.0f)
         ImGui::SameLine(rowStartX + availableWidth - buttonWidth);
 
-    // Each key slot needs its own "listening for input" state.
+    // Only one key slot listens at a time. This is a single function-local
+    // static because rendering is single-threaded (the overlay's Present hook),
+    // so there is no concurrent Draw() - the worst case is a missed capture if
+    // two binders were ever drawn in the same frame, which the UI does not do.
     static const void* s_listeningId = nullptr;
     const bool listening = (s_listeningId == outKey);
 

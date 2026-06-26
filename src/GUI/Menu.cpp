@@ -10,12 +10,17 @@
 #include "Tabs/SettingsTab.h"
 #include "Tabs/SdkTab.h"
 
+#include "../Actions/ActionRuntime.h"
 #include "../Core/Overlay.h"
+#include "../Features/Settings.h"
+#include "CommandPalette.h"
+#include "UI.h"
 #include "imgui.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstring>
+
+namespace ui = fc::gui::ui;
 
 namespace {
 
@@ -33,18 +38,16 @@ ImVec2 Add(const ImVec2& a, const ImVec2& b)
     return ImVec2(a.x + b.x, a.y + b.y);
 }
 
+// Thin local aliases over the shared Palette converters so the host shell code
+// reads as before, while the single source of color logic lives in Theme.h.
 ImVec4 RGBA(unsigned int hex)
 {
-    return ImVec4(
-        ((hex >> 24) & 0xFF) / 255.0f,
-        ((hex >> 16) & 0xFF) / 255.0f,
-        ((hex >> 8)  & 0xFF) / 255.0f,
-        ((hex)       & 0xFF) / 255.0f);
+    return fc::Color(hex);
 }
 
 ImU32 U32(unsigned int hex)
 {
-    return ImGui::ColorConvertFloat4ToU32(RGBA(hex));
+    return fc::ColorU32(hex);
 }
 
 ImVec2 GetMaxWindowSize(const ImVec2& minSize)
@@ -64,43 +67,6 @@ const char* GetTabTitle(const fc::ITab& tab)
 {
     const char* title = tab.Title();
     return (title && title[0] != '\0') ? title : "Untitled";
-}
-
-bool ContainsNoCase(const char* haystack, const char* needle)
-{
-    if (!needle || needle[0] == '\0')
-        return true;
-    if (!haystack)
-        return false;
-
-    for (const char* start = haystack; *start; ++start)
-    {
-        const char* h = start;
-        const char* n = needle;
-        while (*h && *n &&
-               std::tolower(static_cast<unsigned char>(*h)) ==
-               std::tolower(static_cast<unsigned char>(*n)))
-        {
-            ++h;
-            ++n;
-        }
-
-        if (*n == '\0')
-            return true;
-    }
-
-    return false;
-}
-
-bool TabMatchesSearch(const fc::ITab* tab, const char* query)
-{
-    if (!query || query[0] == '\0')
-        return true;
-    if (!tab)
-        return false;
-
-    const char* title = GetTabTitle(*tab);
-    return ContainsNoCase(title, query) || ContainsNoCase(tab->SearchKeywords(), query);
 }
 
 bool BeginPanelChild(const char* id, const ImVec2& size)
@@ -295,6 +261,14 @@ void Menu::RegisterDefaultTabs()
     AddTab(std::make_unique<HealthTab>());
     AddTab(std::make_unique<SettingsTab>());
     AddTab(std::make_unique<SdkTab>());
+
+    // Load persistent settings (hotkeys, scale) once, before the first render,
+    // and push them into the live runtime. Seed defaults from Input so the
+    // store and the Settings tab reflect what is actually bound.
+    Settings& settings = Settings::Get();
+    settings.CaptureFromRuntime();
+    settings.LoadAndApply();
+    settings.CaptureFromRuntime();
 }
 
 void Menu::AddTab(std::unique_ptr<ITab> tab, void* owner)
@@ -322,9 +296,38 @@ void Menu::RemoveTabsByOwner(void* owner)
         m_selectedTab = std::clamp(m_selectedTab, 0, static_cast<int>(m_tabs.size()) - 1);
 }
 
+void Menu::JumpToTab(const char* name)
+{
+    if (!name)
+        return;
+
+    for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
+    {
+        ITab* tab = m_tabs[i].tab.get();
+        if (tab && std::strcmp(GetTabTitle(*tab), name) == 0)
+        {
+            m_selectedTab = i;
+            break;
+        }
+    }
+}
+
 void Menu::Render()
 {
     RegisterDefaultTabs();
+
+    // Keyboard section navigation: arrow left/right cycles tabs. The custom
+    // TopTab uses InvisibleButton and does not capture ImGui's nav, so we drive
+    // it manually. Skip this while the search field is in use - there, arrows
+    // belong to the text cursor / command dropdown.
+    const bool searchActive = m_searchText[0] != '\0';
+    if (!searchActive && !m_tabs.empty() &&
+        (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_RightArrow)))
+    {
+        const int dir = ImGui::IsKeyPressed(ImGuiKey_LeftArrow) ? -1 : 1;
+        const int count = static_cast<int>(m_tabs.size());
+        m_selectedTab = (m_selectedTab + dir + count) % count;
+    }
 
     const ImVec2 minSize(660.0f, 420.0f);
     ImGui::SetNextWindowSize(ImVec2(820.0f, 540.0f), ImGuiCond_FirstUseEver);
@@ -370,11 +373,15 @@ void Menu::Render()
             ImGui::SetNextItemWidth(searchWidth);
             ImGui::InputTextWithHint(
                 "##byster_search",
-                "Search",
+                "Search commands",
                 m_searchText.data(),
                 m_searchText.size());
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(3);
+
+            // Esc clears the search field and closes the command dropdown.
+            if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape))
+                m_searchText[0] = '\0';
         }
 
         ImGui::SetCursorPos(ImVec2(collapseX, kToolbarY));
@@ -383,37 +390,28 @@ void Menu::Render()
 
         ImGui::SetCursorPos(ImVec2(settingsX, kToolbarY));
         if (ToolbarButton("settings_shortcut", ToolIcon::Settings, "Open Settings"))
-        {
-            m_searchText[0] = '\0';
+            JumpToTab("Settings");
 
-            for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
+        // The search field is a global command filter: while it has text, show
+        // an autocomplete dropdown of matching commands and quick navigations.
+        if (showSearch && m_searchText[0] != '\0')
+        {
+            const ImVec2 fieldScreen = Add(windowPos, ImVec2(searchX, kToolbarY + kToolbarButtonSize + 2.0f));
+            const gui::PaletteResult r = gui::RenderCommandPalette(
+                m_searchText.data(), fieldScreen.x, fieldScreen.y, searchWidth, m_paletteSelected);
+
+            if (r.action == gui::PaletteAction::Navigate && r.navTabTitle)
             {
-                ITab* tab = m_tabs[i].tab.get();
-                if (tab && std::strcmp(GetTabTitle(*tab), "Settings") == 0)
-                {
-                    m_selectedTab = i;
-                    break;
-                }
+                JumpToTab(r.navTabTitle);
+                m_searchText[0] = '\0';
             }
-        }
-
-        int firstSearchMatch = -1;
-        for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
-        {
-            if (TabMatchesSearch(m_tabs[i].tab.get(), m_searchText.data()))
+            else if (r.action == gui::PaletteAction::RunCommand)
             {
-                firstSearchMatch = i;
-                break;
+                if (r.command == actions::Command::AutoCast)
+                    Overlay::Get().SetMenuVisible(false);
+                actions::Queue(r.command);
+                m_searchText[0] = '\0';
             }
-        }
-
-        if (m_searchText[0] != '\0' &&
-            (m_selectedTab < 0 ||
-             m_selectedTab >= static_cast<int>(m_tabs.size()) ||
-             !TabMatchesSearch(m_tabs[m_selectedTab].tab.get(), m_searchText.data())))
-        {
-            if (firstSearchMatch >= 0)
-                m_selectedTab = firstSearchMatch;
         }
 
         ImGui::SetCursorPos(ImVec2(kNavStartX, kTopbarY));
@@ -421,7 +419,7 @@ void Menu::Render()
         for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
         {
             ITab* tab = m_tabs[i].tab.get();
-            if (!tab || !TabMatchesSearch(tab, m_searchText.data()))
+            if (!tab)
                 continue;
 
             const char* title = GetTabTitle(*tab);
@@ -455,19 +453,9 @@ void Menu::Render()
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
             if (BeginPanelChild("##byster_content", contentSize))
             {
-                ITab* activeTab = firstSearchMatch >= 0 ? m_tabs[m_selectedTab].tab.get() : nullptr;
+                ITab* activeTab = m_tabs[m_selectedTab].tab.get();
                 if (activeTab)
-                {
                     activeTab->Render();
-                }
-                else
-                {
-                    ImGui::TextColored(RGBA(0xFFD56BFF), "No matching section");
-                    ImGui::Spacing();
-                    ImGui::TextColored(
-                        RGBA(0x7F838CFF),
-                        "Try: actions, logs, health, sdk, hotkeys, diagnostics, modules.");
-                }
             }
             ImGui::EndChild();
             ImGui::PopStyleVar(2);
@@ -477,6 +465,11 @@ void Menu::Render()
     ImGui::End();
 
     ImGui::PopStyleVar(3);
+
+    // Flush any settings change made this frame (hotkeys, scale) to disk. This
+    // runs every frame on the render thread but is a no-op when the store is
+    // clean, so it stays cheap.
+    Settings::Get().SaveIfDirty();
 }
 
 } // namespace fc

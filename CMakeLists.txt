@@ -76,11 +76,16 @@ if(FC_BUILD_OVERLAY)
 
     fc_add_object_module(fc_features
         src/Features/KeyBinder.cpp
+        src/Features/Settings.cpp
     )
+    # Vendored nlohmann/json single-header, used only by fc_features to persist
+    # user settings. Kept local so the heavy header stays out of other TUs.
+    target_include_directories(fc_features PRIVATE ${CMAKE_SOURCE_DIR}/third_party/json)
 
     fc_add_object_module(fc_gui
         src/GUI/Menu.cpp
         src/GUI/Theme.cpp
+        src/GUI/CommandPalette.cpp
         src/GUI/Tabs/ActionsTab.cpp
         src/GUI/Tabs/DashboardTab.cpp
         src/GUI/Tabs/HealthTab.cpp

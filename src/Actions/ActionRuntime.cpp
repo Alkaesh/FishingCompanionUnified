@@ -129,6 +129,20 @@ struct SensorState {
     size_t fish_count = 0;
     uintptr_t fishing_setup = 0;
     uintptr_t fish_bite_meta = 0;
+    // FishingSet live state. From the IL2CPP dump:
+    //   +0x60/+0x61 : bool flags (set activity)
+    //   +0x68       : Synth_5570_Closure moabncmfjej (fishing setup/closure)
+    //   +0x88/+0x89/+0x8A : bool flags (bite/fight activity candidates)
+    //   +0x90       : RigConnector imdaclihign (tackle/rig)
+    //   +0x100      : InteractiveRod oljcldkhomf (the rod currently in hand;
+    //                 0 when no rod is held => cast/hook is impossible)
+    uintptr_t interactive_rod = 0;
+    uintptr_t rig_connector_field = 0;
+    bool fishing_set_flag_0x60 = false;
+    bool fishing_set_flag_0x61 = false;
+    bool fishing_set_flag_0x88 = false;
+    bool fishing_set_flag_0x89 = false;
+    bool fishing_set_flag_0x8A = false;
     uintptr_t logical_fish_lure = 0;
     uintptr_t logical_fish_set = 0;
     uintptr_t logical_fish_guid = 0;
@@ -195,6 +209,32 @@ bool g_has_marked_spot = false;
 Vector3 g_marked_spot{};
 std::vector<void*> g_fish_instances;
 std::chrono::steady_clock::time_point g_next_fish_scan{};
+
+// --- Autonomous fishing FSM (AutoFish) -------------------------------------
+// A self-contained state machine that casts, waits for a bite (detected from
+// the rod load), sets the hook, fights the fish while managing line tension,
+// accepts the catch result, then repeats. It is intentionally separate from
+// the legacy auto_reel timer so both can coexist; when AutoFish is on it owns
+// the reel and the legacy auto_reel is kept off.
+std::atomic_bool g_auto_fish_enabled{false};
+fc::actions::AutoFishParams g_auto_fish_params{};
+std::mutex g_auto_fish_params_mutex;
+
+enum class AutoFishPhase {
+    Idle,
+    Cast,
+    WaitBite,
+    Hooked,
+    Fight,
+    CatchResult,
+};
+
+AutoFishPhase g_auto_fish_phase = AutoFishPhase::Idle;
+std::chrono::steady_clock::time_point g_auto_fish_phase_since{};
+std::chrono::steady_clock::time_point g_auto_fish_bite_since{};
+bool g_auto_fish_bite_armed = false;   // load exceeded threshold, confirming
+float g_auto_fish_baseline_load = 0.0f;
+std::atomic_ullong g_auto_fish_cycles{0};
 
 constexpr uintptr_t k_synth_1402_pfokppcgekh_method = 0x810F30;
 constexpr uintptr_t k_synth_1402_bjkkdngcmfm_method = 0x814BD0;
@@ -353,6 +393,8 @@ std::optional<fc::actions::Command> command_from_text(const std::string& raw)
         return fc::actions::Command::AutoCatch;
     if (text == "auto_scout" || text == "autoscout" || text == "scout_cast")
         return fc::actions::Command::AutoScout;
+    if (text == "auto_fish" || text == "autofish" || text == "toggle_auto_fish")
+        return fc::actions::Command::ToggleAutoFish;
     if (text == "stop_all" || text == "stop")
         return fc::actions::Command::StopAll;
     if (text == "mark_spot" || text == "mark")
@@ -503,6 +545,8 @@ const char* command_name(fc::actions::Command command)
         return "auto_catch";
     case fc::actions::Command::AutoScout:
         return "auto_scout";
+    case fc::actions::Command::ToggleAutoFish:
+        return "auto_fish";
     case fc::actions::Command::StopAll:
         return "stop_all";
     case fc::actions::Command::MarkSpot:
@@ -1873,6 +1917,24 @@ SensorState read_sensor_state(const ProbeSet& probe)
                 state.fishing_setup + k_synth_5570_fish_bite_meta_field).value_or(0);
     }
 
+    // Live FishingSet state flags and references. The interactive rod
+    // (FishingSet+0x100) is the key readiness signal: it is 0 until the player
+    // actually holds an assembled rod, so a cast is impossible while it is 0.
+    state.interactive_rod =
+        read_process_value<uintptr_t>(probe.fishing_set, 0x100).value_or(0);
+    state.rig_connector_field =
+        read_process_value<uintptr_t>(probe.fishing_set, 0x90).value_or(0);
+    state.fishing_set_flag_0x60 =
+        read_process_value<uint8_t>(probe.fishing_set, 0x60).value_or(0) != 0;
+    state.fishing_set_flag_0x61 =
+        read_process_value<uint8_t>(probe.fishing_set, 0x61).value_or(0) != 0;
+    state.fishing_set_flag_0x88 =
+        read_process_value<uint8_t>(probe.fishing_set, 0x88).value_or(0) != 0;
+    state.fishing_set_flag_0x89 =
+        read_process_value<uint8_t>(probe.fishing_set, 0x89).value_or(0) != 0;
+    state.fishing_set_flag_0x8A =
+        read_process_value<uint8_t>(probe.fishing_set, 0x8A).value_or(0) != 0;
+
     state.fish_count = g_fish_instances.size();
     state.logical_fish_lure = read_process_value<uintptr_t>(probe.lure_complex, 0x58).value_or(0);
     const uintptr_t rig_connector =
@@ -2273,6 +2335,13 @@ std::string sensor_summary(const SensorState& state)
         << " FS160=" << hex_u64(state.fishing_set_160)
         << " rodLoad=" << std::fixed << std::setprecision(3) << state.rod_load
         << " reel=" << std::fixed << std::setprecision(3) << state.reel_value
+        << " interactiveRod=" << hex_u64(state.interactive_rod)
+        << " rig=" << hex_u64(state.rig_connector_field)
+        << " flags[60=" << state.fishing_set_flag_0x60
+        << ",61=" << state.fishing_set_flag_0x61
+        << ",88=" << state.fishing_set_flag_0x88
+        << ",89=" << state.fishing_set_flag_0x89
+        << ",8A=" << state.fishing_set_flag_0x8A << "]"
         << " lure=" << format_vec(state.best_lure_pos)
         << (state.best_lure_estimated ? "(est)" : "")
         << " lureSrc=" << lure_position_source(state)
@@ -3627,6 +3696,39 @@ void toggle_auto_reel()
     log_line(enabled ? "auto_reel: enabled" : "auto_reel: disabled");
 }
 
+// Forward declarations: the AutoFish helpers below (set_auto_reel_enabled,
+// auto_fish_phase_name, auto_fish_reset_to_idle) are defined further down in
+// this translation unit, but set_auto_fish_enabled needs them here.
+void set_auto_reel_enabled(bool enabled);
+const char* auto_fish_phase_name(AutoFishPhase phase);
+void auto_fish_reset_to_idle();
+
+void set_auto_fish_enabled(bool enabled)
+{
+    if (g_auto_fish_enabled.load() == enabled)
+        return;
+
+    g_auto_fish_enabled.store(enabled);
+    // The FSM owns the reel while it runs; force the legacy timer off so the
+    // two never fight over ManualRoll.
+    if (enabled) {
+        set_auto_reel_enabled(false);
+        auto_fish_reset_to_idle();
+    }
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_status.auto_fish_enabled = enabled;
+    g_status.auto_fish_state = enabled ? auto_fish_phase_name(g_auto_fish_phase) : "";
+    g_status.message = enabled ? "auto fish enabled" : "auto fish disabled";
+    g_status.auto_reel_enabled = g_auto_reel_enabled;
+    log_line(enabled ? "auto_fish: enabled" : "auto_fish: disabled");
+}
+
+void toggle_auto_fish()
+{
+    set_auto_fish_enabled(!g_auto_fish_enabled.load());
+}
+
 void maybe_auto_reel(const ActionSet& actions)
 {
     if (!g_auto_reel_enabled.load())
@@ -4010,6 +4112,7 @@ bool perform_verified_fish_debug_command(fc::actions::Command command, const Act
 
 void perform_stop_all(const ActionSet& actions)
 {
+    set_auto_fish_enabled(false);
     set_auto_reel_enabled(false);
     set_diagnostics_enabled(false);
 
@@ -4018,6 +4121,295 @@ void perform_stop_all(const ActionSet& actions)
         ok = game_actions::pulse_input_action(actions.return_to_idle);
 
     set_command_result(fc::actions::Command::StopAll, ok);
+}
+
+const char* auto_fish_phase_name(AutoFishPhase phase)
+{
+    switch (phase) {
+    case AutoFishPhase::Idle:       return "idle";
+    case AutoFishPhase::Cast:       return "cast";
+    case AutoFishPhase::WaitBite:   return "wait_bite";
+    case AutoFishPhase::Hooked:     return "hooked";
+    case AutoFishPhase::Fight:      return "fight";
+    case AutoFishPhase::CatchResult:return "catch_result";
+    }
+    return "unknown";
+}
+
+void auto_fish_enter_phase(AutoFishPhase phase)
+{
+    g_auto_fish_phase = phase;
+    g_auto_fish_phase_since = std::chrono::steady_clock::now();
+    g_auto_fish_bite_armed = false;
+
+    std::ostringstream out;
+    out << "auto_fish: -> " << auto_fish_phase_name(phase);
+    log_line(out.str());
+    remember_event(out.str());
+}
+
+// Pure cast sequence for the FSM: SwitchThrowMode -> ChangeThrowDistance ->
+// Hitch -> hold StartHooking. Every step drives the Unity InputSystem only
+// (no mouse/keyboard), so it works with the game window minimized or in the
+// background. Returns true if the lure is observed to move after the cast.
+bool auto_fish_pure_cast(const ActionSet& actions)
+{
+    const SensorState cast_before = refresh_sensor_status();
+
+    // If the line is already out (lure far / reel tension), reel it in first so
+    // we start a fresh cast. Pure InputSystem reel.
+    if (std::fabs(cast_before.reel_value) > 0.5f || cast_before.fisher_to_lure > 2.0f) {
+        hold_input_action(actions.manual_roll_boost ? actions.manual_roll_boost
+                                                    : actions.manual_roll,
+                          8500);
+        sleep_interruptible(800);
+    }
+
+    const fc::actions::Command sequence[] = {
+        fc::actions::Command::SwitchThrowMode,
+        fc::actions::Command::ChangeThrowDistance,
+        fc::actions::Command::Hitch,
+    };
+    bool ok = true;
+    for (fc::actions::Command command : sequence) {
+        ok = perform_command(command, actions) && ok;
+        sleep_interruptible(90);
+    }
+
+    // The actual cast in RF4 is a hold of the hooking action; drive it via the
+    // InputSystem, not a mouse button.
+    if (actions.start_hooking) {
+        hold_input_action(actions.start_hooking, 1600);
+        ok = ok && true;
+    } else {
+        ok = false;
+    }
+
+    sleep_interruptible(1800);
+    const SensorState after = refresh_sensor_status();
+    const float lure_delta = distance_between(cast_before.best_lure_pos, after.best_lure_pos);
+
+    // Success criteria, in order of reliability. We cannot rely on lure_delta
+    // because LureComplex is only instantiated after the cast fully lands and is
+    // absent in this RF4 build until then. Instead, treat the cast as good if
+    // the InputAction was driven AND the rod now shows any load/tension or the
+    // reel is engaged - i.e. the line is out and in the water.
+    const bool line_out =
+        after.rod_load > 0.02f ||
+        std::fabs(after.reel_value) > 0.2f ||
+        (cast_before.has_best_lure_pos && after.has_best_lure_pos && lure_delta > 1.0f);
+    const bool observed = ok && line_out;
+
+    std::ostringstream out;
+    out << "auto_fish: cast lure_delta=" << std::fixed << std::setprecision(2) << lure_delta
+        << " rod_load=" << std::setprecision(3) << after.rod_load
+        << " reel=" << after.reel_value
+        << " fish=" << after.fish_count << " ok=" << (ok ? 1 : 0)
+        << " line_out=" << (line_out ? 1 : 0);
+    log_line(out.str());
+    return observed;
+}
+
+// Pure catch-result accept for the FSM. RF4's catch-result screen uses the same
+// InputSystem actions as everything else; we pulse the keep action rather than
+// faking Space/clicks. Falls back to a short roll so a missed accept still
+// advances the FSM instead of stalling forever.
+bool auto_fish_pure_accept(const ActionSet& actions)
+{
+    // No dedicated "keep fish" InputAction is mapped in the generated offsets,
+    // but the catch result is dismissed by returning to idle / confirming.
+    // Drive it via the known ReturnToIdle action; if that is unavailable, reel
+    // briefly so the line is recovered and we can re-cast.
+    bool ok = false;
+    if (actions.return_to_idle) {
+        ok = game_actions::pulse_input_action(actions.return_to_idle);
+        sleep_interruptible(500);
+    }
+    if (!ok && (actions.manual_roll_boost ? actions.manual_roll_boost : actions.manual_roll)) {
+        ok = hold_input_action(actions.manual_roll_boost ? actions.manual_roll_boost
+                                                         : actions.manual_roll,
+                               1500);
+    }
+    return ok;
+}
+
+// Thresholding for bite detection. We compare against a baseline captured at
+// the start of WaitBite so drift in the resting rod load does not desensitize
+// the detector.
+bool auto_fish_load_exceeds(const SensorState& state, float extra)
+{
+    return state.rod_load > (g_auto_fish_baseline_load + extra);
+}
+
+// One non-blocking tick of the reel at maximum speed via the Unity InputSystem
+// only (no mouse/keyboard). This keeps working when the game window is
+// minimized/backgrounded, because it just drives the InputAction state machine
+// in memory the same way a pressed mouse button would.
+bool auto_fish_reel_tick(const ActionSet& actions, DWORD hold_ms)
+{
+    void* reel_action = actions.manual_roll_boost;
+    if (!reel_action)
+        reel_action = actions.manual_roll;
+    return hold_input_action(reel_action, hold_ms);
+}
+
+void auto_fish_reset_to_idle()
+{
+    auto_fish_enter_phase(AutoFishPhase::Idle);
+}
+
+void perform_auto_fish_tick(const ActionSet& actions)
+{
+    if (!g_auto_fish_enabled.load())
+        return;
+
+    const SensorState state = refresh_sensor_status();
+
+    // Keep Status live regardless of phase.
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_status.auto_fish_enabled = true;
+        g_status.auto_fish_state = auto_fish_phase_name(g_auto_fish_phase);
+        g_status.auto_fish_rod_load = state.rod_load;
+        g_status.auto_fish_reel_value = state.reel_value;
+        g_status.auto_fish_rod_in_hand = state.interactive_rod != 0;
+        g_status.auto_fish_cycles = g_auto_fish_cycles.load();
+    }
+
+    fc::actions::AutoFishParams params;
+    {
+        std::lock_guard<std::mutex> lock(g_auto_fish_params_mutex);
+        params = g_auto_fish_params;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto phase_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - g_auto_fish_phase_since).count();
+
+    switch (g_auto_fish_phase) {
+    case AutoFishPhase::Idle: {
+        // Begin a fresh cast cycle. Drop diagnostics noise; we already log per
+        // phase transitions.
+        auto_fish_enter_phase(AutoFishPhase::Cast);
+        break;
+    }
+
+    case AutoFishPhase::Cast: {
+        // Do not attempt a cast until the player actually holds an assembled
+        // rod. FishingSet+0x100 (InteractiveRod) is 0 while the rod is on the
+        // rest/inventory, and in that state the StartHooking InputAction does
+        // nothing - which is exactly the "it didn't even cast" failure. Wait
+        // here instead of hammering a no-op cast.
+        if (state.interactive_rod == 0) {
+            if (phase_ms < 50 || (phase_ms % 2000) < 50) {
+                std::ostringstream out;
+                out << "auto_fish: waiting for InteractiveRod in hand (FS+0x100=0) "
+                    << "setup=" << hex_u64(state.fishing_setup)
+                    << " rig=" << hex_u64(state.rig_connector_field);
+                log_line(out.str());
+            }
+            break;
+        }
+
+        // Pure InputSystem cast sequence; no mouse/keyboard, works minimized.
+        const bool ok = auto_fish_pure_cast(actions);
+        if (!ok) {
+            std::ostringstream out;
+            out << "auto_fish: cast failed, cooldown " << params.cycle_cooldown_ms << "ms";
+            log_line(out.str());
+            sleep_interruptible(static_cast<DWORD>(params.cycle_cooldown_ms));
+            auto_fish_reset_to_idle();
+            break;
+        }
+        // Capture the resting rod load as the bite-detection baseline, then
+        // arm the bite watcher.
+        const SensorState post = refresh_sensor_status();
+        g_auto_fish_baseline_load = post.rod_load;
+        sleep_interruptible(static_cast<DWORD>(params.post_cast_wait_ms));
+        auto_fish_enter_phase(AutoFishPhase::WaitBite);
+        break;
+    }
+
+    case AutoFishPhase::WaitBite: {
+        // Bite = rod load above threshold for bite_confirm_ms (debounced).
+        if (auto_fish_load_exceeds(state, params.bite_load_threshold)) {
+            if (!g_auto_fish_bite_armed) {
+                g_auto_fish_bite_armed = true;
+                g_auto_fish_bite_since = now;
+            } else {
+                const auto armed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - g_auto_fish_bite_since).count();
+                if (armed_ms >= params.bite_confirm_ms) {
+                    std::ostringstream out;
+                    out << "auto_fish: BITE detected load=" << std::fixed
+                        << std::setprecision(3) << state.rod_load
+                        << " baseline=" << g_auto_fish_baseline_load;
+                    log_line(out.str());
+                    remember_event(out.str());
+                    auto_fish_enter_phase(AutoFishPhase::Hooked);
+                }
+            }
+        } else {
+            g_auto_fish_bite_armed = false;
+        }
+
+        // Bail out and re-cast if nothing bites within the timeout.
+        if (phase_ms / 1000 >= params.bite_timeout_s) {
+            log_line("auto_fish: bite timeout, re-casting");
+            auto_fish_reset_to_idle();
+        }
+        break;
+    }
+
+    case AutoFishPhase::Hooked: {
+        // Strike: drive the hook-set purely through the Unity InputSystem
+        // (StartHooking action held, then released). No mouse/keyboard, so it
+        // works when the window is in the background.
+        if (actions.start_hooking)
+            hold_input_action(actions.start_hooking, static_cast<DWORD>(params.hook_hold_ms));
+        sleep_interruptible(300);
+        auto_fish_enter_phase(AutoFishPhase::Fight);
+        break;
+    }
+
+    case AutoFishPhase::Fight: {
+        // Reel at maximum speed, but watch the rod load: when it crosses the
+        // danger threshold we ease off (stop reeling briefly) so the line
+        // tension does not snap the tackle. This is the manual-load control
+        // the user asked for.
+        const bool overloaded = state.rod_load >= params.fight_load_danger;
+        if (overloaded) {
+            std::ostringstream out;
+            out << "auto_fish: FIGHT overload load=" << std::fixed
+                << std::setprecision(3) << state.rod_load << " easing off";
+            log_line(out.str());
+            sleep_interruptible(450);
+            break;
+        }
+
+        auto_fish_reel_tick(actions, 900);
+
+        // The catch-result screen is the terminal condition of the fight. When
+        // the tackle is home and a fish signal is present, hand off to the
+        // catch-result phase which accepts the fish and restarts the loop.
+        if (is_likely_catch_result_screen(state)) {
+            log_line("auto_fish: catch result screen detected");
+            auto_fish_enter_phase(AutoFishPhase::CatchResult);
+        }
+        break;
+    }
+
+    case AutoFishPhase::CatchResult: {
+        // Accept the catch result via the InputSystem only (no key/click),
+        // count a completed cycle, and return to Idle so the FSM owns the
+        // next cast.
+        auto_fish_pure_accept(actions);
+        ++g_auto_fish_cycles;
+        sleep_interruptible(static_cast<DWORD>(params.cycle_cooldown_ms));
+        auto_fish_reset_to_idle();
+        break;
+    }
+    }
 }
 
 DWORD WINAPI worker_thread(void*)
@@ -4043,6 +4435,7 @@ DWORD WINAPI worker_thread(void*)
         process_command_file();
         refresh_sensor_status();
         maybe_auto_reel(g_actions);
+        perform_auto_fish_tick(g_actions);
         maybe_log_periodic_diagnostics();
 
         fc::actions::Command command{};
@@ -4075,6 +4468,13 @@ DWORD WINAPI worker_thread(void*)
         if (command == fc::actions::Command::ToggleAutoReel) {
             set_busy(command);
             toggle_auto_reel();
+            set_command_result(command, true);
+            continue;
+        }
+
+        if (command == fc::actions::Command::ToggleAutoFish) {
+            set_busy(command);
+            toggle_auto_fish();
             set_command_result(command, true);
             continue;
         }
@@ -4183,6 +4583,8 @@ DWORD WINAPI worker_thread(void*)
         g_status.diagnostic_snapshots = g_diagnostic_snapshots;
         g_status.auto_reel_enabled = g_auto_reel_enabled;
         g_status.auto_reel_ticks = g_auto_reel_ticks;
+        g_status.auto_fish_enabled = g_auto_fish_enabled.load();
+        g_status.auto_fish_state = "";
     }
 
     log_line("FishingCompanion action runtime stopped");
@@ -4211,6 +4613,10 @@ bool Start()
         g_status.diagnostic_snapshots = g_diagnostic_snapshots;
         g_status.auto_reel_enabled = g_auto_reel_enabled;
         g_status.auto_reel_ticks = g_auto_reel_ticks;
+        g_status.auto_fish_enabled = g_auto_fish_enabled.load();
+        g_status.auto_fish_cycles = g_auto_fish_cycles.load();
+        g_status.auto_fish_state = g_auto_fish_enabled.load()
+            ? auto_fish_phase_name(g_auto_fish_phase) : "";
     }
 
     g_thread = CreateThread(nullptr, 0, worker_thread, nullptr, 0, nullptr);
@@ -4238,6 +4644,10 @@ void Stop()
     if (!was_running)
         return;
 
+    // Make sure neither autonomous loop is left running across a restart.
+    g_auto_fish_enabled.store(false);
+    g_auto_fish_phase = AutoFishPhase::Idle;
+
     std::lock_guard<std::mutex> lock(g_mutex);
     g_queue.clear();
     g_status.queued = 0;
@@ -4248,6 +4658,8 @@ void Stop()
     g_status.diagnostic_snapshots = g_diagnostic_snapshots;
     g_status.auto_reel_enabled = g_auto_reel_enabled;
     g_status.auto_reel_ticks = g_auto_reel_ticks;
+    g_status.auto_fish_enabled = false;
+    g_status.auto_fish_state = "";
 }
 
 void Queue(Command command)
@@ -4266,6 +4678,7 @@ void Queue(Command command)
             g_status.message = std::string("queued: ") + command_name(command);
             g_status.auto_reel_enabled = g_auto_reel_enabled;
             g_status.auto_reel_ticks = g_auto_reel_ticks;
+            g_status.auto_fish_enabled = g_auto_fish_enabled.load();
             queued = true;
             event = g_status.message;
         }
@@ -4289,10 +4702,47 @@ Status GetStatus()
         copy.diagnostic_snapshots = g_diagnostic_snapshots;
         copy.auto_reel_enabled = g_auto_reel_enabled;
         copy.auto_reel_ticks = g_auto_reel_ticks;
+        copy.auto_fish_enabled = g_auto_fish_enabled.load();
+        copy.auto_fish_cycles = g_auto_fish_cycles.load();
+        copy.auto_fish_state = g_auto_fish_enabled.load()
+            ? auto_fish_phase_name(g_auto_fish_phase) : std::string();
     }
 
     copy.recent_events = recent_events_snapshot();
     return copy;
+}
+
+void SetAutoFish(bool enabled)
+{
+    set_auto_fish_enabled(enabled);
+}
+
+bool IsAutoFishEnabled()
+{
+    return g_auto_fish_enabled.load();
+}
+
+AutoFishParams GetAutoFishParams()
+{
+    std::lock_guard<std::mutex> lock(g_auto_fish_params_mutex);
+    return g_auto_fish_params;
+}
+
+void SetAutoFishParams(const AutoFishParams& params)
+{
+    // Clamp defensively so the GUI cannot push nonsensical values into the FSM.
+    AutoFishParams safe = params;
+    if (safe.bite_load_threshold < 0.0f) safe.bite_load_threshold = 0.0f;
+    if (safe.fight_load_danger < safe.bite_load_threshold)
+        safe.fight_load_danger = safe.bite_load_threshold + 0.05f;
+    if (safe.bite_confirm_ms < 0) safe.bite_confirm_ms = 0;
+    if (safe.hook_hold_ms < 0) safe.hook_hold_ms = 0;
+    if (safe.post_cast_wait_ms < 0) safe.post_cast_wait_ms = 0;
+    if (safe.bite_timeout_s < 5) safe.bite_timeout_s = 5;
+    if (safe.cycle_cooldown_ms < 0) safe.cycle_cooldown_ms = 0;
+
+    std::lock_guard<std::mutex> lock(g_auto_fish_params_mutex);
+    g_auto_fish_params = safe;
 }
 
 } // namespace fc::actions

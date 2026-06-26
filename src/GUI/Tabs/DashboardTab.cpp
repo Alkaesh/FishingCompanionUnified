@@ -4,6 +4,7 @@
 
 #include "DashboardTab.h"
 
+#include "../UI.h"
 #include "../../Actions/ActionRuntime.h"
 #include "../../Core/Input.h"
 #include "../../Features/KeyBinder.h"
@@ -14,56 +15,7 @@
 #include <cstdio>
 #include <vector>
 
-namespace {
-
-ImVec4 RGBA(unsigned int hex)
-{
-    return ImVec4(
-        ((hex >> 24) & 0xFF) / 255.0f,
-        ((hex >> 16) & 0xFF) / 255.0f,
-        ((hex >> 8)  & 0xFF) / 255.0f,
-        ((hex)       & 0xFF) / 255.0f);
-}
-
-bool BeginCard(const char* id, const ImVec2& size)
-{
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, RGBA(0x121416F5));
-    ImGui::PushStyleColor(ImGuiCol_Border, RGBA(0x2B2C31FF));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 3.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(13.0f, 12.0f));
-
-#if IMGUI_VERSION_NUM >= 19000
-    return ImGui::BeginChild(
-        id,
-        size,
-        ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-#else
-    return ImGui::BeginChild(
-        id,
-        size,
-        true,
-        ImGuiWindowFlags_AlwaysUseWindowPadding |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse);
-#endif
-}
-
-void EndCard()
-{
-    ImGui::EndChild();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(2);
-}
-
-void Metric(const char* label, const char* value, const ImVec4& color)
-{
-    ImGui::TextColored(RGBA(0x7F838CFF), "%s", label);
-    ImGui::Spacing();
-    ImGui::TextColored(color, "%s", value);
-}
-
-} // namespace
+namespace ui = fc::gui::ui;
 
 namespace fc {
 
@@ -97,69 +49,69 @@ void DashboardTab::Render()
     const ImVec2 cardSize(cardWidth, 68.0f);
 
     const char* runtimeState = runtime.busy ? "busy" : (runtime.ready ? "ready" : "waiting");
-    if (BeginCard("##runtime_card", cardSize))
+    if (ui::BeginStatCard("##runtime_card", cardSize))
     {
-        Metric(
+        ui::Metric(
             "Action runtime",
             runtimeState,
-            runtime.ready ? RGBA(0xFFB800FF) : RGBA(0xFF7A66FF));
+            runtime.ready ? Color(Palette::Amber) : Color(Palette::Coral));
     }
-    EndCard();
+    ui::EndCard();
 
     if (twoColumns)
         ImGui::SameLine(0.0f, gap);
-    if (BeginCard("##queue_card", cardSize))
-        Metric("Command queue", queueValue, runtime.queued == 0 ? RGBA(0xB9BBC0FF) : RGBA(0xFFD56BFF));
-    EndCard();
+    if (ui::BeginStatCard("##queue_card", cardSize))
+        ui::Metric("Command queue", queueValue, runtime.queued == 0 ? Color(Palette::TextSoft) : Color(Palette::AmberHi));
+    ui::EndCard();
 
-    if (BeginCard("##modules_card", cardSize))
-        Metric("SDK modules loaded / failed", moduleValue, failedModules == 0 ? RGBA(0xFFB800FF) : RGBA(0xFF7A66FF));
-    EndCard();
+    if (ui::BeginStatCard("##modules_card", cardSize))
+        ui::Metric("SDK modules loaded / failed", moduleValue, failedModules == 0 ? Color(Palette::Amber) : Color(Palette::Coral));
+    ui::EndCard();
 
     if (twoColumns)
         ImGui::SameLine(0.0f, gap);
-    if (BeginCard("##diagnostics_card", cardSize))
+    if (ui::BeginStatCard("##diagnostics_card", cardSize))
     {
-        Metric(
+        ui::Metric(
             "Diagnostics",
             runtime.diagnostics_enabled ? "enabled" : "off",
-            runtime.diagnostics_enabled ? RGBA(0xFFB800FF) : RGBA(0x7F838CFF));
+            runtime.diagnostics_enabled ? Color(Palette::Amber) : Color(Palette::TextFaint));
     }
-    EndCard();
+    ui::EndCard();
 
     ImGui::Spacing();
     ImGui::SeparatorText("Current State");
 
-    if (BeginCard("##state_card", ImVec2(0.0f, 112.0f)))
+    if (ui::BeginCard("##state_card", ImVec2(0.0f, 112.0f)))
     {
-        ImGui::TextColored(RGBA(0x7F838CFF), "Message");
+        ImGui::TextColored(Color(Palette::TextFaint), "Message");
         ImGui::TextWrapped("%s", runtime.message.empty() ? "No runtime message yet." : runtime.message.c_str());
 
         if (!runtime.last_command.empty())
         {
             ImGui::Spacing();
             ImGui::TextColored(
-                runtime.last_effect_confirmed ? RGBA(0xFFB800FF) : RGBA(0xFFD56BFF),
+                runtime.last_effect_confirmed ? Color(Palette::Amber) : Color(Palette::AmberHi),
                 "Last command: %s / %s",
                 runtime.last_command.c_str(),
                 runtime.last_result.c_str());
         }
     }
-    EndCard();
+    ui::EndCard();
 
     ImGui::Spacing();
     ImGui::SeparatorText("Hotkeys");
 
-    if (BeginCard("##hotkeys_card", ImVec2(0.0f, 64.0f)))
+    if (ui::BeginCard("##hotkeys_card", ImVec2(0.0f, 64.0f)))
     {
         ImGui::TextColored(
-            RGBA(0xB9BBC0FF),
+            Color(Palette::TextSoft),
             "Menu: %s    Unload: %s",
             KeyBinder::KeyName(Input::ToggleKey()),
             KeyBinder::KeyName(Input::UnloadKey()));
-        ImGui::TextColored(RGBA(0x7F838CFF), "Configure these in Settings.");
+        ImGui::TextColored(Color(Palette::TextFaint), "Configure these in Settings.");
     }
-    EndCard();
+    ui::EndCard();
 }
 
 } // namespace fc
