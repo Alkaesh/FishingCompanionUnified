@@ -57,6 +57,18 @@ function Get-CanonicalCommand([string]$value) {
     }
 }
 
+function Get-EffectiveWaitSeconds([string]$canonical, [int]$requested) {
+    $minimum = switch ($canonical) {
+        "manual_roll_boost" { 10; break }
+        "auto_cast" { 14; break }
+        "auto_catch" { 16; break }
+        "auto_scout" { 16; break }
+        default { 0 }
+    }
+
+    return [Math]::Max($requested, $minimum)
+}
+
 function Read-LastCsvRow {
     if (-not (Test-Path -LiteralPath $coordPath)) {
         return $null
@@ -292,6 +304,7 @@ if (-not (Test-Path -LiteralPath $GameDir)) {
 }
 
 $canonical = Get-CanonicalCommand $Command
+$effectiveWaitSeconds = Get-EffectiveWaitSeconds $canonical $WaitSeconds
 $runId = "{0}_{1}" -f (Get-Date -Format "yyyyMMdd_HHmmss_fff"), $canonical
 
 Send-FcCommand "snapshot" 700
@@ -299,7 +312,7 @@ $before = Read-LastCsvRow
 $logOffset = Get-LogLength
 
 Send-FcCommand $Command 0
-Start-Sleep -Seconds $WaitSeconds
+Start-Sleep -Seconds $effectiveWaitSeconds
 Send-FcCommand "snapshot" 900
 
 $after = Read-LastCsvRow
@@ -406,7 +419,8 @@ $record = [ordered]@{
     time = (Get-Date).ToString("o")
     command = $canonical
     original_command = $Command
-    wait_seconds = $WaitSeconds
+    wait_seconds = $effectiveWaitSeconds
+    requested_wait_seconds = $WaitSeconds
     verdict = $verdict
     reason = $reason
     screenshot = $screenshotPath
@@ -475,6 +489,7 @@ $latest = @(
     "command: $canonical"
     "verdict: $verdict"
     "reason: $reason"
+    "wait_seconds: $effectiveWaitSeconds requested=$WaitSeconds"
     "tick_ms: $beforeTick -> $afterTick"
     "distance_delta: $($record.metrics.distance_delta)"
     "lure_delta: $($record.metrics.lure_delta)"
