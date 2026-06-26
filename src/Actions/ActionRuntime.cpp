@@ -215,6 +215,7 @@ constexpr uintptr_t k_lure_simple_state_field = 0x30;
 constexpr uintptr_t k_lure_state_world_position_field = 0xC0;
 constexpr uintptr_t k_lure_simple_legacy_position_field = 0xE8;
 constexpr uintptr_t k_fish_position_child_field = 0x38;
+constexpr uintptr_t k_fish_position_alt_child_field = 0x50;
 constexpr uintptr_t k_fish_position_child_world_field = 0xC0;
 constexpr uintptr_t k_fish_position_legacy_primary_field = 0xD8;
 constexpr uintptr_t k_fish_position_legacy_alternate_field = 0xCC;
@@ -1009,13 +1010,18 @@ FishPositionRead read_fish_position(
         }
     };
 
-    const uintptr_t child =
-        read_process_value<uintptr_t>(fish, k_fish_position_child_field).value_or(0);
-    if (likely_pointer(child)) {
+    auto consider_child_position = [&](uintptr_t field, int source) {
+        const uintptr_t child =
+            read_process_value<uintptr_t>(fish, field).value_or(0);
+        if (!likely_pointer(child))
+            return;
         consider(
             read_absolute_value<Vector3>(child + k_fish_position_child_world_field),
-            1);
-    }
+            source);
+    };
+
+    consider_child_position(k_fish_position_child_field, 1);
+    consider_child_position(k_fish_position_alt_child_field, 4);
 
     const auto primary =
         read_process_value<Vector3>(fish, k_fish_position_legacy_primary_field);
@@ -1947,6 +1953,8 @@ const char* fish_position_source_name(int source)
         return "raw_fish_0xD8";
     case 3:
         return "raw_fish_0xCC";
+    case 4:
+        return "raw_fish_0x50_0xC0";
     default:
         return "none";
     }
