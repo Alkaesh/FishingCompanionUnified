@@ -397,6 +397,10 @@ std::optional<fc::actions::Command> command_from_text(const std::string& raw)
         return fc::actions::Command::SnapshotDiagnostics;
     if (text == "toggle_diagnostics" || text == "diagnostics")
         return fc::actions::Command::ToggleDiagnostics;
+    if (text == "keep_fish" || text == "fish_keep" || text == "to_keepnet" || text == "sadok")
+        return fc::actions::Command::KeepFish;
+    if (text == "release_fish" || text == "fish_release" || text == "release" || text == "otpustit")
+        return fc::actions::Command::ReleaseFish;
 
     return std::nullopt;
 }
@@ -541,6 +545,10 @@ const char* command_name(fc::actions::Command command)
         return "snapshot_diagnostics";
     case fc::actions::Command::ToggleDiagnostics:
         return "toggle_diagnostics";
+    case fc::actions::Command::KeepFish:
+        return "keep_fish";
+    case fc::actions::Command::ReleaseFish:
+        return "release_fish";
     }
 
     return "unknown";
@@ -2970,6 +2978,55 @@ bool send_key_state(WORD vk, bool pressed)
     return SendInput(1, &input, sizeof(INPUT)) == 1;
 }
 
+struct ProcessWindowSearch {
+    DWORD pid = 0;
+    HWND hwnd = nullptr;
+};
+
+BOOL CALLBACK enum_process_windows(HWND hwnd, LPARAM lparam)
+{
+    auto* search = reinterpret_cast<ProcessWindowSearch*>(lparam);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != search->pid || !IsWindowVisible(hwnd))
+        return TRUE;
+
+    search->hwnd = hwnd;
+    return FALSE;
+}
+
+HWND find_process_window()
+{
+    ProcessWindowSearch search{};
+    search.pid = GetCurrentProcessId();
+    EnumWindows(enum_process_windows, reinterpret_cast<LPARAM>(&search));
+    return search.hwnd;
+}
+
+bool focus_process_window()
+{
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    ShowWindow(hwnd, SW_RESTORE);
+    BringWindowToTop(hwnd);
+    return SetForegroundWindow(hwnd) != FALSE;
+}
+
+bool send_scan_key_state(WORD vk, bool pressed)
+{
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    if (!scan)
+        return send_key_state(vk, pressed);
+
+    INPUT input{};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wScan = static_cast<WORD>(scan);
+    input.ki.dwFlags = KEYEVENTF_SCANCODE | (pressed ? 0 : KEYEVENTF_KEYUP);
+    return SendInput(1, &input, sizeof(INPUT)) == 1;
+}
+
 bool tap_key(WORD vk, DWORD hold_ms = 55)
 {
     if (!send_key_state(vk, true))
@@ -2977,6 +3034,15 @@ bool tap_key(WORD vk, DWORD hold_ms = 55)
 
     sleep_interruptible(hold_ms);
     return send_key_state(vk, false);
+}
+
+bool tap_scan_key(WORD vk, DWORD hold_ms = 55)
+{
+    if (!send_scan_key_state(vk, true))
+        return false;
+
+    sleep_interruptible(hold_ms);
+    return send_scan_key_state(vk, false);
 }
 
 bool tap_key_combo(WORD modifier, WORD key, DWORD hold_ms = 55)
@@ -2995,6 +3061,78 @@ bool send_mouse_event(DWORD flags)
     input.type = INPUT_MOUSE;
     input.mi.dwFlags = flags;
     return SendInput(1, &input, sizeof(INPUT)) == 1;
+}
+
+bool click_window_fraction(double x_fraction, double y_fraction)
+{
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    RECT rect{};
+    if (!GetWindowRect(hwnd, &rect))
+        return false;
+
+    focus_process_window();
+    sleep_interruptible(80);
+
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0)
+        return false;
+
+    const int x = rect.left + static_cast<int>(std::lround(width * x_fraction));
+    const int y = rect.top + static_cast<int>(std::lround(height * y_fraction));
+    if (!SetCursorPos(x, y))
+        return false;
+
+    sleep_interruptible(40);
+    const bool down = send_mouse_event(MOUSEEVENTF_LEFTDOWN);
+    sleep_interruptible(80);
+    const bool up = send_mouse_event(MOUSEEVENTF_LEFTUP);
+    return down && up;
+}
+
+bool post_window_key(WORD vk)
+{
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    const LPARAM down_lparam = 1 | (static_cast<LPARAM>(scan) << 16);
+    const LPARAM up_lparam =
+        1 | (static_cast<LPARAM>(scan) << 16) | (1LL << 30) | (1LL << 31);
+    const bool down = PostMessageW(hwnd, WM_KEYDOWN, vk, down_lparam) != FALSE;
+    sleep_interruptible(95);
+    const bool up = PostMessageW(hwnd, WM_KEYUP, vk, up_lparam) != FALSE;
+    return down && up;
+}
+
+bool post_window_click_fraction(double x_fraction, double y_fraction)
+{
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    RECT rect{};
+    if (!GetClientRect(hwnd, &rect))
+        return false;
+
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0)
+        return false;
+
+    const int x = static_cast<int>(std::lround(width * x_fraction));
+    const int y = static_cast<int>(std::lround(height * y_fraction));
+    const LPARAM point = MAKELPARAM(x, y);
+    PostMessageW(hwnd, WM_MOUSEMOVE, 0, point);
+    sleep_interruptible(40);
+    const bool down = PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, point) != FALSE;
+    sleep_interruptible(80);
+    const bool up = PostMessageW(hwnd, WM_LBUTTONUP, 0, point) != FALSE;
+    return down && up;
 }
 
 bool send_left_mouse_hold(DWORD hold_ms, bool shift_boost = false)
@@ -3271,6 +3409,90 @@ void set_command_result(fc::actions::Command command, bool result)
         false,
         result ? "InputAction/call accepted; gameplay effect not verified for this button"
                : "call returned false");
+}
+
+bool perform_catch_result_choice(
+    fc::actions::Command command,
+    WORD vk,
+    const char* label,
+    double click_x_fraction,
+    double click_y_fraction)
+{
+    const SensorState before = refresh_sensor_status();
+    const bool had_fish =
+        before.fish_count > 0 ||
+        before.has_closest_fish ||
+        before.logical_fish_lure ||
+        before.logical_fish_set ||
+        before.logical_fish_guid ||
+        before.logical_fish_rig;
+
+    fc::Overlay::Get().SetMenuVisible(false);
+    sleep_interruptible(180);
+    const bool focused = focus_process_window();
+    sleep_interruptible(120);
+    bool ok = tap_scan_key(vk, 95);
+    if (!ok)
+        ok = tap_key(vk, 95);
+    sleep_interruptible(1200);
+
+    scan_fish_instances(true);
+    SensorState after = refresh_sensor_status();
+    auto still_has_result_fish = [](const SensorState& state) {
+        return
+            state.fish_count > 0 ||
+            state.has_closest_fish ||
+            state.logical_fish_lure ||
+            state.logical_fish_set ||
+            state.logical_fish_guid ||
+            state.logical_fish_rig;
+    };
+    bool has_fish_after =
+        after.fish_count > 0 ||
+        after.has_closest_fish ||
+        after.logical_fish_lure ||
+        after.logical_fish_set ||
+        after.logical_fish_guid ||
+        after.logical_fish_rig;
+    bool confirmed = ok && had_fish && !has_fish_after;
+    bool clicked = false;
+    bool posted = false;
+    if (ok && !confirmed) {
+        clicked = click_window_fraction(click_x_fraction, click_y_fraction);
+        sleep_interruptible(1200);
+        scan_fish_instances(true);
+        after = refresh_sensor_status();
+        has_fish_after = still_has_result_fish(after);
+        confirmed = clicked && had_fish && !has_fish_after;
+    }
+    if (ok && !confirmed) {
+        const bool posted_key = post_window_key(vk);
+        sleep_interruptible(250);
+        const bool posted_click = post_window_click_fraction(click_x_fraction, click_y_fraction);
+        posted = posted_key || posted_click;
+        sleep_interruptible(1200);
+        scan_fish_instances(true);
+        after = refresh_sensor_status();
+        has_fish_after = still_has_result_fish(after);
+        confirmed = posted && had_fish && !has_fish_after;
+    }
+
+    log_coordinate_snapshot(command_name(command), after);
+
+    std::ostringstream observation;
+    observation << "sent " << label
+        << "; focused=" << (focused ? "true" : "false")
+        << "; clicked=" << (clicked ? "true" : "false")
+        << "; posted=" << (posted ? "true" : "false")
+        << "; fish=" << before.fish_count << "->" << after.fish_count
+        << " logical_lure=" << hex_u64(before.logical_fish_lure)
+        << "->" << hex_u64(after.logical_fish_lure)
+        << " logical_rig=" << hex_u64(before.logical_fish_rig)
+        << "->" << hex_u64(after.logical_fish_rig)
+        << " closest=" << hex_u64(before.closest_fish)
+        << "->" << hex_u64(after.closest_fish);
+    set_command_result_observed(command, ok, confirmed, observation.str());
+    return ok;
 }
 
 void set_busy(fc::actions::Command command)
@@ -3725,6 +3947,18 @@ DWORD WINAPI worker_thread(void*)
 
         if (command == fc::actions::Command::AutoScout) {
             perform_auto_scout(g_actions);
+            continue;
+        }
+
+        if (command == fc::actions::Command::KeepFish) {
+            set_busy(command);
+            perform_catch_result_choice(command, VK_SPACE, "Space keep_fish", 0.449, 0.848);
+            continue;
+        }
+
+        if (command == fc::actions::Command::ReleaseFish) {
+            set_busy(command);
+            perform_catch_result_choice(command, VK_BACK, "Backspace release_fish", 0.551, 0.848);
             continue;
         }
 

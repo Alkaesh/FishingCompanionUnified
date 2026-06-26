@@ -52,6 +52,8 @@ enum class Command {
     ToggleAutoReel,
     SnapshotDiagnostics,
     ToggleDiagnostics,
+    KeepFish,
+    ReleaseFish,
 };
 
 struct Status {
