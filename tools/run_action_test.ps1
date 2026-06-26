@@ -352,6 +352,8 @@ $snapshotQualityByLog = $logLines | Where-Object { $_ -match "^snapshot_quality\
 $lureCandidatesByLog = $logLines | Where-Object { $_ -match "^lure_vector_candidates\[" } | Select-Object -Last 1
 $fishCandidatesByLog = $logLines | Where-Object { $_ -match "^fish_vector_candidates\[" } | Select-Object -Last 1
 $fishScanByLog = $logLines | Where-Object { $_ -match "^fish_scan:" } | Select-Object -Last 1
+$fishPathByLog = $logLines | Where-Object { $_ -match "^fish_path\[" } | Select-Object -Last 1
+$spawnDirectByLog = $logLines | Where-Object { $_ -match "^spawn_fish direct:" } | Select-Object -Last 1
 
 $stateChanged =
     ([Math]::Abs($distanceDelta) -ge 0.05) -or
@@ -481,6 +483,8 @@ $record = [ordered]@{
         lure_candidates_line = [string]$lureCandidatesByLog
         fish_candidates_line = [string]$fishCandidatesByLog
         fish_scan_line = [string]$fishScanByLog
+        fish_path_line = [string]$fishPathByLog
+        spawn_direct_line = [string]$spawnDirectByLog
         new_log_tail = @($logLines | Select-Object -Last 20)
     }
 }
@@ -507,6 +511,8 @@ $latest = @(
     "lure_candidates: $($record.runtime.lure_candidates_line)"
     "fish_candidates: $($record.runtime.fish_candidates_line)"
     "fish_scan: $($record.runtime.fish_scan_line)"
+    "fish_path: $($record.runtime.fish_path_line)"
+    "spawn_direct: $($record.runtime.spawn_direct_line)"
     "runtime: $($record.runtime.result_line)"
     "observed: $($record.runtime.observed_line)"
     "jsonl: $TestLog"
