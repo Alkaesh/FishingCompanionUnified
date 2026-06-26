@@ -1,0 +1,10 @@
+# Copy one command into il2cpp_action_commands.txt next to the game exe.
+# The injected action module consumes the file and clears it after reading.
+status
+# hitch
+# toggle_reel
+# start_hooking
+# switch_throw_mode
+# return_idle
+# change_throw_distance
+# quit

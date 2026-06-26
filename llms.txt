@@ -1,0 +1,30 @@
+# Fishing Companion SDK
+
+> C++17 Dear ImGui / DirectX 11 overlay SDK shell for safe UI modules, HUD panels, timers, and allowed data integrations.
+
+## Start Here
+
+- [SDK Overview](docs/SDK_OVERVIEW.md): What the SDK is, repository map, public headers, runtime flow.
+- [Quickstart](docs/QUICKSTART.md): Minimal module that registers a tab.
+- [API Reference](docs/API_REFERENCE.md): C ABI, C++ wrappers, versioning, tab registration.
+- [UI Guide](docs/UI_GUIDE.md): Visual rules and SDK UI helpers.
+- [Module Lifecycle](docs/MODULE_LIFECYCLE.md): Loading from `mods/*.dll`, success/failure behavior, shutdown.
+- [AI Context](docs/AI_CONTEXT.md): Repo-specific instructions for coding agents.
+
+## Key Source Files
+
+- [FCSDK.h](src/SDK/FCSDK.h): Public SDK ABI.
+- [FCSDK_UI.h](src/SDK/FCSDK_UI.h): Public UI helper layer.
+- [ModuleLoader.cpp](src/SDK/ModuleLoader.cpp): Runtime module loader.
+- [Menu.cpp](src/GUI/Menu.cpp): Main shell UI and navigation.
+- [Theme.cpp](src/GUI/Theme.cpp): ImGui theme.
+- [Overlay.cpp](src/Core/Overlay.cpp): DX11 lifecycle, cursor handling, module loading.
+- [ExampleMod.cpp](examples/ExampleMod.cpp): Minimal external module.
+
+## Safety Scope
+
+Use this SDK for UI modules, HUD widgets, settings, timers, and allowed telemetry/log/save-file integrations. Do not add anti-cheat bypasses, stealth mechanisms, unauthorized memory access, or multiplayer advantage automation.
+
+## ImGui Module Note
+
+External DLL modules that compile their own Dear ImGui code must set the host context before drawing: `ImGui::SetCurrentContext((ImGuiContext*)FCSDK_GetImGuiContext())`. Keep the module Dear ImGui version aligned with `FCSDK_GetImGuiVersion()`.

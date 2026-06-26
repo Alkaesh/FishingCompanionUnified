@@ -1,0 +1,13 @@
+# Copy this file next to the game executable as:
+# il2cpp_targets.txt
+
+# Format:
+# assembly;type_or_alias;member;kind
+
+# type_or_alias may be the obfuscated type, the real type, or the alias column
+# from il2cpp_offsets.txt.
+# For methods, you may write either Update or Update(0). The dumper will match
+# the exact method first and then the base method name.
+
+Assembly-CSharp.dll;RF4.Client.Water.InteractionController;Update(0);method
+Assembly-CSharp.dll;RF4.Client.Water.InteractionController;followWaterFlow;field

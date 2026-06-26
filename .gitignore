@@ -1,0 +1,46 @@
+# Build output
+build/
+build_codex/
+out/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+
+# Local runtime/test artifacts
+test_logs/
+evidence/screens/
+*.log
+*_actions.jsonl
+*_actions_latest.txt
+FishingCompanion_actions.log
+FishingCompanion_actions_status.txt
+FishingCompanion_action_commands.txt
+FishingCompanion_fishing_diag_full.csv
+FishingCompanion_fishing_coords_v4.csv
+
+# IDA and local reversing databases
+*.i64
+*.idb
+*.til
+*.nam
+*.dmp
+
+# Generated heavy IL2CPP exports; regenerate locally with tools/
+modules/il2cpp_tooling/generated/il2cpp_enriched_targets.csv
+modules/il2cpp_tooling/generated/il2cpp_enriched_targets.txt
+modules/il2cpp_tooling/generated/candidate_targets*.txt
+modules/il2cpp_tooling/generated/interaction_surface.md
+modules/il2cpp_tooling/generated/interaction_targets.txt
+modules/il2cpp_tooling/generated/interaction_presets/
+
+# Editor/system files
+.vs/
+.vscode/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,26 @@
+# Copy this file next to the game executable as:
+# il2cpp_dump_filter.txt
+
+# If this file does not exist, the dumper skips common framework assemblies:
+# mscorlib.dll, netstandard.dll, System*.dll, Unity*.dll, Mono.*.dll, Microsoft.*.dll
+
+# Dump only matching assemblies. Wildcards * and ? are supported.
+include_assembly=Assembly-CSharp.dll
+
+# Optional narrower filters:
+# include_type=Player*
+# include_type=Game.PlayerController
+# include_member=Update*
+# include_member=health
+
+# Optional exclusions:
+# exclude_type=*.Debug*
+# exclude_member=get_*
+# exclude_member=set_*
+
+# Optional kind filter:
+# include_kind=method
+# include_kind=field
+
+# Set all=true to disable default framework noise filtering when no include_assembly is set.
+# all=true

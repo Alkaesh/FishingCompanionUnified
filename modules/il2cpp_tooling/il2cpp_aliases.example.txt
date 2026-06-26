@@ -1,0 +1,9 @@
+# Copy this file next to the game executable as:
+# il2cpp_aliases.txt
+
+# Format:
+# assembly;obfuscated_type;alias
+
+# Example:
+# Assembly-CSharp.dll;gdnidinfjmh;FishingSet
+# Assembly-CSharp.dll;fidfbihahij;MarketItem

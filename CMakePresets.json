@@ -1,0 +1,38 @@
+{
+  "version": 5,
+  "configurePresets": [
+    {
+      "name": "msvc-x64",
+      "displayName": "MSVC x64 overlay",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/cmake/msvc-x64",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Release;RelWithDebInfo;Debug",
+        "FC_BUILD_OVERLAY": "ON",
+        "FC_BUILD_IL2CPP_TOOLING": "OFF"
+      }
+    },
+    {
+      "name": "msvc-x64-tooling",
+      "displayName": "MSVC x64 overlay + IL2CPP tooling",
+      "inherits": "msvc-x64",
+      "binaryDir": "${sourceDir}/build/cmake/msvc-x64-tooling",
+      "cacheVariables": {
+        "FC_BUILD_IL2CPP_TOOLING": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "msvc-x64",
+      "configuration": "Release"
+    },
+    {
+      "name": "release-tooling",
+      "configurePreset": "msvc-x64-tooling",
+      "configuration": "Release"
+    }
+  ]
+}
