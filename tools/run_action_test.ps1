@@ -36,7 +36,8 @@ $coordinateTailColumns = @(
     "has_lure",
     "has_lure_simple",
     "has_best_lure_pos",
-    "has_closest_fish"
+    "has_closest_fish",
+    "logical_fish_rig"
 )
 
 function Convert-JsonLine($object) {
@@ -84,10 +85,13 @@ function Read-LastCsvRow {
     $lastColumns = @($last -split ",")
     if ($lastColumns.Count -gt $headerColumns.Count) {
         $baseHeaderCount = $headerColumns.Count
+        $extraCount = $lastColumns.Count - $baseHeaderCount
+        $tailStart = [Math]::Max(0, $coordinateTailColumns.Count - $extraCount)
         for ($i = $headerColumns.Count; $i -lt $lastColumns.Count; $i++) {
             $tailIndex = $i - $baseHeaderCount
-            if ($tailIndex -lt $coordinateTailColumns.Count) {
-                $columnName = $coordinateTailColumns[$tailIndex]
+            $tailColumnIndex = $tailStart + $tailIndex
+            if ($tailColumnIndex -lt $coordinateTailColumns.Count) {
+                $columnName = $coordinateTailColumns[$tailColumnIndex]
             }
             else {
                 $columnName = "extra_$i"
@@ -332,6 +336,8 @@ $flagsBefore = Get-TextValue $before "fishing_set_0x160"
 $flagsAfter = Get-TextValue $after "fishing_set_0x160"
 $logicalBefore = Get-TextValue $before "logical_fish_lure"
 $logicalAfter = Get-TextValue $after "logical_fish_lure"
+$logicalRigBefore = Get-TextValue $before "logical_fish_rig"
+$logicalRigAfter = Get-TextValue $after "logical_fish_rig"
 $closestBefore = Get-TextValue $before "closest_fish"
 $closestAfter = Get-TextValue $after "closest_fish"
 $qualityBefore = Get-TextValue $before "coordinate_quality"
@@ -361,12 +367,14 @@ $stateChanged =
     ([Math]::Abs($reelDelta) -ge 0.05) -or
     ($flagsBefore -ne $flagsAfter) -or
     ($logicalBefore -ne $logicalAfter) -or
+    ($logicalRigBefore -ne $logicalRigAfter) -or
     ($closestBefore -ne $closestAfter) -or
     ($fishBefore -ne $fishAfter)
 
 $fishResolved =
     ($fishBefore -gt 0 -and $fishAfter -lt $fishBefore) -or
     ($logicalBefore -ne "0x0000000000000000" -and $logicalAfter -eq "0x0000000000000000") -or
+    ($logicalRigBefore -ne "0x0000000000000000" -and $logicalRigAfter -eq "0x0000000000000000") -or
     ($flagsBefore -ne $flagsAfter -and $flagsAfter -match "0800$")
 
 $verdict = "review"
@@ -445,6 +453,7 @@ $record = [ordered]@{
         reel_value = Get-Number $before "reel_value"
         flags_0x160 = $flagsBefore
         logical_fish_lure = $logicalBefore
+        logical_fish_rig = $logicalRigBefore
         closest_fish = $closestBefore
         coordinate_quality = $qualityBefore
         lure_position_source = $lureSourceBefore
@@ -461,6 +470,7 @@ $record = [ordered]@{
         reel_value = Get-Number $after "reel_value"
         flags_0x160 = $flagsAfter
         logical_fish_lure = $logicalAfter
+        logical_fish_rig = $logicalRigAfter
         closest_fish = $closestAfter
         coordinate_quality = $qualityAfter
         lure_position_source = $lureSourceAfter

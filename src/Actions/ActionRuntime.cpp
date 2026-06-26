@@ -132,6 +132,7 @@ struct SensorState {
     uintptr_t logical_fish_lure = 0;
     uintptr_t logical_fish_set = 0;
     uintptr_t logical_fish_guid = 0;
+    uintptr_t logical_fish_rig = 0;
     uintptr_t closest_fish = 0;
     int closest_fish_source = 0;
     int closest_fish_position_source = 0;
@@ -197,6 +198,7 @@ constexpr uintptr_t k_synth_5570_string_ctor_method = 0x11B5DB0;
 constexpr uintptr_t k_fishing_set_setup_field = 0x68;
 constexpr uintptr_t k_synth_5570_fish_bite_meta_field = 0x30;
 constexpr uintptr_t k_fishing_set_rig_connector_field = 0x90;
+constexpr uintptr_t k_rig_connector_active_fish_field = 0x60;
 constexpr uintptr_t k_fish_bite_meta_owner_value_field = 0x20;
 constexpr uintptr_t k_codegen_init_runtime_metadata_method = 0x328770;
 constexpr uintptr_t k_internal_object_new_method = 0x35BFF0;
@@ -1819,6 +1821,13 @@ SensorState read_sensor_state(const ProbeSet& probe)
 
     state.fish_count = g_fish_instances.size();
     state.logical_fish_lure = read_process_value<uintptr_t>(probe.lure_complex, 0x58).value_or(0);
+    const uintptr_t rig_connector =
+        read_process_value<uintptr_t>(probe.fishing_set, k_fishing_set_rig_connector_field)
+            .value_or(0);
+    state.logical_fish_rig = rig_connector ?
+        read_absolute_value<uintptr_t>(rig_connector + k_rig_connector_active_fish_field)
+            .value_or(0) :
+        0;
     state.logical_fish_set = fishing_set_active_fish(probe.fishing_set);
     if (const auto guid = fishing_set_guid(probe.fishing_set))
         state.logical_fish_guid = fish_from_guid(*guid);
@@ -1866,6 +1875,7 @@ SensorState read_sensor_state(const ProbeSet& probe)
     consider_fish(reinterpret_cast<void*>(state.logical_fish_lure), 2);
     consider_fish(reinterpret_cast<void*>(state.logical_fish_set), 3);
     consider_fish(reinterpret_cast<void*>(state.logical_fish_guid), 4);
+    consider_fish(reinterpret_cast<void*>(state.logical_fish_rig), 5);
 
     if (state.has_closest_fish) {
         if (state.has_best_lure_pos)
@@ -1921,6 +1931,8 @@ const char* closest_fish_source_name(int source)
         return "fishing_set";
     case 4:
         return "fishing_set_guid";
+    case 5:
+        return "rig_connector";
     default:
         return "none";
     }
@@ -2136,6 +2148,7 @@ void log_fish_vector_candidates(const char* reason, const SensorState& state)
     add_root("logical_lure", state.logical_fish_lure);
     add_root("logical_set", state.logical_fish_set);
     add_root("logical_guid", state.logical_fish_guid);
+    add_root("logical_rig", state.logical_fish_rig);
     add_root("closest", state.closest_fish);
 
     std::vector<FishVectorCandidate> candidates;
@@ -2186,6 +2199,7 @@ void log_snapshot_quality(const char* reason, const ProbeSet& probe, const Senso
         << " logical_lure=" << hex_u64(state.logical_fish_lure)
         << " logical_set=" << hex_u64(state.logical_fish_set)
         << " logical_guid=" << hex_u64(state.logical_fish_guid)
+        << " logical_rig=" << hex_u64(state.logical_fish_rig)
         << " closest_fish=" << hex_u64(state.closest_fish)
         << " fish_pos=" << format_vec(state.closest_fish_pos)
         << " dist_fisher_lure=" << std::fixed << std::setprecision(2) << state.fisher_to_lure
@@ -2219,11 +2233,13 @@ std::string sensor_summary(const SensorState& state)
         out << " setup=" << hex_u64(state.fishing_setup)
             << " biteMeta=" << hex_u64(state.fish_bite_meta);
     }
-    if (state.logical_fish_lure || state.logical_fish_set || state.logical_fish_guid) {
+    if (state.logical_fish_lure || state.logical_fish_set ||
+        state.logical_fish_guid || state.logical_fish_rig) {
         out << " logicalFish="
             << hex_u64(state.logical_fish_lure ? state.logical_fish_lure :
                        state.logical_fish_set ? state.logical_fish_set :
-                       state.logical_fish_guid);
+                       state.logical_fish_guid ? state.logical_fish_guid :
+                       state.logical_fish_rig);
     }
     if (state.has_closest_fish) {
         out << " fishPos=" << format_vec(state.closest_fish_pos)
@@ -2581,7 +2597,8 @@ void write_coordinate_header(std::ofstream& out)
            "rod_load,reel_value,reel_flags,"
            "coordinate_quality,lure_position_source,fish_position_source,"
            "has_fishing_set,has_fisher,has_rod,has_reel,has_lure,"
-           "has_lure_simple,has_best_lure_pos,has_closest_fish\n";
+           "has_lure_simple,has_best_lure_pos,has_closest_fish,"
+           "logical_fish_rig\n";
 }
 
 bool log_coordinate_snapshot(const char* reason, const SensorState& state)
@@ -2647,6 +2664,7 @@ bool log_coordinate_snapshot(const char* reason, const SensorState& state)
         << ',' << (state.has_lure_simple ? 1 : 0)
         << ',' << (state.has_best_lure_pos ? 1 : 0)
         << ',' << (state.has_closest_fish ? 1 : 0)
+        << ',' << hex_u64(state.logical_fish_rig)
         << '\n';
 
     return true;
@@ -3007,7 +3025,8 @@ bool has_detected_fish(const SensorState& state)
     return state.has_closest_fish ||
         state.logical_fish_lure != 0 ||
         state.logical_fish_set != 0 ||
-        state.logical_fish_guid != 0;
+        state.logical_fish_guid != 0 ||
+        state.logical_fish_rig != 0;
 }
 
 using SpawnActiveFishFn = uintptr_t (*)(SystemGuid*, void*);
