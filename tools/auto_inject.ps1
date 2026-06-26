@@ -1,5 +1,6 @@
 param(
     [switch]$Build,
+    [switch]$UnloadOnly,
     [int]$TargetPid = 0,
     [string]$ProcessName = "rf4_x64",
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
@@ -240,7 +241,7 @@ if ($Build) {
     }
 }
 
-if (-not (Test-Path -LiteralPath $SourceDll)) {
+if (-not $UnloadOnly -and -not (Test-Path -LiteralPath $SourceDll)) {
     throw "Source DLL was not found: $SourceDll"
 }
 
@@ -248,6 +249,11 @@ $process = Get-TargetProcess
 Write-Step "Target PID $($process.Id): $($process.Path)"
 
 Unload-ExistingDll $process
+
+if ($UnloadOnly) {
+    Write-Step "Unload-only requested; skipping injection."
+    return
+}
 
 $targetDir = Split-Path -Parent $TargetDll
 if (-not (Test-Path -LiteralPath $targetDir)) {
