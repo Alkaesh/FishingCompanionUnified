@@ -54,6 +54,7 @@ enum class Command {
     ToggleDiagnostics,
     KeepFish,
     ReleaseFish,
+    ContinueFishing,
 };
 
 struct Status {

@@ -401,6 +401,8 @@ std::optional<fc::actions::Command> command_from_text(const std::string& raw)
         return fc::actions::Command::KeepFish;
     if (text == "release_fish" || text == "fish_release" || text == "release" || text == "otpustit")
         return fc::actions::Command::ReleaseFish;
+    if (text == "continue_fishing" || text == "keep_and_cast" || text == "keep_and_catch" || text == "continue")
+        return fc::actions::Command::ContinueFishing;
 
     return std::nullopt;
 }
@@ -549,6 +551,8 @@ const char* command_name(fc::actions::Command command)
         return "keep_fish";
     case fc::actions::Command::ReleaseFish:
         return "release_fish";
+    case fc::actions::Command::ContinueFishing:
+        return "continue_fishing";
     }
 
     return "unknown";
@@ -3492,7 +3496,7 @@ bool perform_catch_result_choice(
         << " closest=" << hex_u64(before.closest_fish)
         << "->" << hex_u64(after.closest_fish);
     set_command_result_observed(command, ok, confirmed, observation.str());
-    return ok;
+    return confirmed;
 }
 
 void set_busy(fc::actions::Command command)
@@ -3785,12 +3789,35 @@ void set_diagnostics_enabled(bool enabled)
     log_line(enabled ? "fishing diagnostics enabled" : "fishing diagnostics disabled");
 }
 
-void perform_auto_catch(const ActionSet& actions)
+bool perform_auto_catch(const ActionSet& actions)
 {
     bool ok = perform_auto_cast(actions);
     set_auto_reel_enabled(true);
     ok = log_diagnostic_snapshot("auto_catch") && ok;
     set_command_result(fc::actions::Command::AutoCatch, ok);
+    return ok;
+}
+
+void perform_continue_fishing(const ActionSet& actions)
+{
+    set_busy(fc::actions::Command::ContinueFishing);
+    const bool accepted = perform_catch_result_choice(
+        fc::actions::Command::ContinueFishing,
+        VK_SPACE,
+        "Space keep_fish",
+        0.449,
+        0.848);
+    if (!accepted)
+        return;
+
+    sleep_interruptible(900);
+    const bool restarted = perform_auto_catch(actions);
+    set_command_result_observed(
+        fc::actions::Command::ContinueFishing,
+        restarted,
+        restarted,
+        restarted ? "catch result accepted; auto_catch restarted"
+                  : "catch result accepted; auto_catch restart failed");
 }
 
 bool mark_current_spot(const char* reason)
@@ -3959,6 +3986,11 @@ DWORD WINAPI worker_thread(void*)
         if (command == fc::actions::Command::ReleaseFish) {
             set_busy(command);
             perform_catch_result_choice(command, VK_BACK, "Backspace release_fish", 0.551, 0.848);
+            continue;
+        }
+
+        if (command == fc::actions::Command::ContinueFishing) {
+            perform_continue_fishing(g_actions);
             continue;
         }
 

@@ -52,6 +52,7 @@ function Get-CanonicalCommand([string]$value) {
         { $_ -in @("autocast") } { return "auto_cast" }
         { $_ -in @("autocatch") } { return "auto_catch" }
         { $_ -in @("autoscout", "scout_cast") } { return "auto_scout" }
+        { $_ -in @("continue", "keep_and_cast", "keep_and_catch") } { return "continue_fishing" }
         { $_ -in @("returntoidle") } { return "return_idle" }
         { $_ -in @("snapshot", "snapshot_diagnostics") } { return "snapshot_diagnostics" }
         default { return $text }
@@ -64,6 +65,7 @@ function Get-EffectiveWaitSeconds([string]$canonical, [int]$requested) {
         "auto_cast" { 14; break }
         "auto_catch" { 16; break }
         "auto_scout" { 16; break }
+        "continue_fishing" { 24; break }
         default { 0 }
     }
 
