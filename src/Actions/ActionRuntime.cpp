@@ -123,6 +123,7 @@ struct SensorState {
     bool has_lure = false;
     bool has_lure_simple = false;
     bool has_best_lure_pos = false;
+    bool lure_pos_from_child = false;
     bool best_lure_estimated = false;
     bool has_marked_spot = false;
     size_t fish_count = 0;
@@ -138,6 +139,15 @@ struct SensorState {
     float closest_fish_to_lure = 0.0f;
     float closest_fish_to_fisher = 0.0f;
     bool has_closest_fish = false;
+};
+
+struct LureVectorCandidate {
+    std::string path;
+    uintptr_t offset = 0;
+    Vector3 value{};
+    float dist_to_estimated = 0.0f;
+    float dist_to_fisher = 0.0f;
+    float dist_to_rod = 0.0f;
 };
 
 std::atomic_bool g_running{false};
@@ -178,6 +188,9 @@ constexpr uintptr_t k_synth_1402_class_global = 0x3EB76D0;
 constexpr uintptr_t k_fish_spawn_mode_class_global = 0x3ED92C0;
 constexpr uintptr_t k_fish_position_source_class_global = 0x3EBCC18;
 constexpr uintptr_t k_fish_position_bounds_class_global = 0x3EBCC20;
+constexpr uintptr_t k_lure_simple_state_field = 0x30;
+constexpr uintptr_t k_lure_state_world_position_field = 0xC0;
+constexpr uintptr_t k_lure_simple_legacy_position_field = 0xE8;
 
 const char* command_name(fc::actions::Command command);
 ProbeSet capture_probe();
@@ -1680,7 +1693,22 @@ SensorState read_sensor_state(const ProbeSet& probe)
     state.lure_simple = read_process_value<uintptr_t>(probe.lure_complex, 0x38).value_or(0);
     state.has_lure_simple = state.lure_simple != 0;
     if (state.lure_simple) {
-        state.lure_pos = read_absolute_value<Vector3>(state.lure_simple + 0xE8).value_or(Vector3{});
+        const uintptr_t lure_state =
+            read_absolute_value<uintptr_t>(
+                state.lure_simple + k_lure_simple_state_field).value_or(0);
+        std::optional<Vector3> child_lure_pos;
+        if (lure_state) {
+            child_lure_pos =
+                read_absolute_value<Vector3>(lure_state + k_lure_state_world_position_field);
+        }
+        if (child_lure_pos && valid_vector(*child_lure_pos) && !near_zero_vector(*child_lure_pos)) {
+            state.lure_pos = *child_lure_pos;
+            state.lure_pos_from_child = true;
+        } else {
+            state.lure_pos =
+                read_absolute_value<Vector3>(
+                    state.lure_simple + k_lure_simple_legacy_position_field).value_or(Vector3{});
+        }
         state.lure_velocity = read_absolute_value<Vector3>(state.lure_simple + 0xF4).value_or(Vector3{});
     }
     state.lure_estimated_pos = add_vectors(state.rod_mid, state.lure_local);
@@ -1802,6 +1830,8 @@ const char* lure_position_source(const SensorState& state)
 {
     if (!state.has_best_lure_pos)
         return "none";
+    if (state.lure_pos_from_child)
+        return "raw_lure_simple_0x30_0xC0";
     return state.best_lure_estimated ? "estimated_rod_mid_lure_local" : "raw_lure_simple";
 }
 
@@ -1836,6 +1866,114 @@ const char* coordinate_quality(const SensorState& state)
     return "ok";
 }
 
+float reference_distance(const Vector3& value, const Vector3& reference)
+{
+    if (!valid_vector(reference) || near_zero_vector(reference))
+        return std::numeric_limits<float>::max();
+    return distance_between(value, reference);
+}
+
+void collect_lure_vector_candidates(
+    std::vector<LureVectorCandidate>& candidates,
+    const std::string& path,
+    uintptr_t base,
+    const SensorState& state,
+    uintptr_t max_offset = 0x240)
+{
+    if (!base)
+        return;
+
+    for (uintptr_t offset = 0x10; offset <= max_offset; offset += sizeof(float)) {
+        const auto value = read_absolute_value<Vector3>(base + offset);
+        if (!value || !valid_vector(*value) || near_zero_vector(*value))
+            continue;
+
+        candidates.push_back(LureVectorCandidate{
+            path,
+            offset,
+            *value,
+            reference_distance(*value, state.lure_estimated_pos),
+            reference_distance(*value, state.fisher_pos),
+            reference_distance(*value, state.rod_mid),
+        });
+    }
+}
+
+std::string append_offset_path(const std::string& root, uintptr_t offset)
+{
+    std::ostringstream out;
+    out << root << "+0x" << std::uppercase << std::hex << offset << "->child";
+    return out.str();
+}
+
+void collect_lure_child_vector_candidates(
+    std::vector<LureVectorCandidate>& candidates,
+    const std::string& root,
+    uintptr_t base,
+    const SensorState& state)
+{
+    if (!base)
+        return;
+
+    for (uintptr_t offset = 0x10; offset <= 0x240; offset += sizeof(uintptr_t)) {
+        const uintptr_t child = read_absolute_value<uintptr_t>(base + offset).value_or(0);
+        if (!likely_pointer(child))
+            continue;
+
+        collect_lure_vector_candidates(
+            candidates,
+            append_offset_path(root, offset),
+            child,
+            state,
+            0x180);
+    }
+}
+
+float lure_candidate_score(const LureVectorCandidate& candidate)
+{
+    if (candidate.dist_to_estimated != std::numeric_limits<float>::max())
+        return candidate.dist_to_estimated;
+    if (candidate.dist_to_fisher != std::numeric_limits<float>::max())
+        return candidate.dist_to_fisher;
+    return candidate.dist_to_rod;
+}
+
+void log_lure_vector_candidates(const char* reason, const ProbeSet& probe, const SensorState& state)
+{
+    std::vector<LureVectorCandidate> candidates;
+    candidates.reserve(128);
+    collect_lure_vector_candidates(
+        candidates,
+        "complex",
+        reinterpret_cast<uintptr_t>(probe.lure_complex),
+        state);
+    collect_lure_child_vector_candidates(
+        candidates,
+        "complex",
+        reinterpret_cast<uintptr_t>(probe.lure_complex),
+        state);
+    collect_lure_vector_candidates(candidates, "simple", state.lure_simple, state);
+    collect_lure_child_vector_candidates(candidates, "simple", state.lure_simple, state);
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        return lure_candidate_score(left) < lure_candidate_score(right);
+    });
+
+    std::ostringstream out;
+    out << "lure_vector_candidates[" << reason << "]: count=" << candidates.size();
+    const size_t limit = std::min<size_t>(candidates.size(), 8);
+    for (size_t i = 0; i < limit; ++i) {
+        const auto& candidate = candidates[i];
+        out << " " << candidate.path
+            << "+0x" << std::uppercase << std::hex << candidate.offset << std::dec
+            << "=" << format_vec(candidate.value)
+            << " dEst=" << std::fixed << std::setprecision(2) << candidate.dist_to_estimated
+            << " dF=" << candidate.dist_to_fisher
+            << " dR=" << candidate.dist_to_rod;
+    }
+    log_line(out.str());
+}
+
 void log_snapshot_quality(const char* reason, const ProbeSet& probe, const SensorState& state)
 {
     std::ostringstream out;
@@ -1859,6 +1997,7 @@ void log_snapshot_quality(const char* reason, const ProbeSet& probe, const Senso
         << " dist_fisher_lure=" << std::fixed << std::setprecision(2) << state.fisher_to_lure
         << " dist_rod_lure=" << std::fixed << std::setprecision(2) << state.rod_tip_to_lure;
     log_line(out.str());
+    log_lure_vector_candidates(reason, probe, state);
 }
 
 std::string sensor_summary(const SensorState& state)

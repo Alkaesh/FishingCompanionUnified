@@ -336,6 +336,7 @@ $failedByLog = $logLines | Where-Object { $_ -match "^$([regex]::Escape($canonic
 $calledByLog = $logLines | Where-Object { $_ -match "^$([regex]::Escape($canonical)):\s+called" } | Select-Object -Last 1
 $observedByLog = $logLines | Where-Object { $_ -match "^$([regex]::Escape($canonical)) observed:" } | Select-Object -Last 1
 $snapshotQualityByLog = $logLines | Where-Object { $_ -match "^snapshot_quality\[" } | Select-Object -Last 1
+$lureCandidatesByLog = $logLines | Where-Object { $_ -match "^lure_vector_candidates\[" } | Select-Object -Last 1
 
 $stateChanged =
     ([Math]::Abs($distanceDelta) -ge 0.05) -or
@@ -461,6 +462,7 @@ $record = [ordered]@{
         result_line = [string]$resultLine
         observed_line = [string]$observedByLog
         snapshot_quality_line = [string]$snapshotQualityByLog
+        lure_candidates_line = [string]$lureCandidatesByLog
         new_log_tail = @($logLines | Select-Object -Last 20)
     }
 }
@@ -483,6 +485,7 @@ $latest = @(
     "coord_csv: exists=$($record.diagnostics.coordinate_csv.exists) bytes=$($record.diagnostics.coordinate_csv.length) updated=$($record.diagnostics.coordinate_csv.last_write_time)"
     "action_log: exists=$($record.diagnostics.action_log.exists) bytes=$($record.diagnostics.action_log.length) new_lines=$($record.diagnostics.new_log_line_count)"
     "quality: $($record.runtime.snapshot_quality_line)"
+    "lure_candidates: $($record.runtime.lure_candidates_line)"
     "runtime: $($record.runtime.result_line)"
     "observed: $($record.runtime.observed_line)"
     "jsonl: $TestLog"
