@@ -1798,6 +1798,69 @@ SensorState read_sensor_state(const ProbeSet& probe)
     return state;
 }
 
+const char* lure_position_source(const SensorState& state)
+{
+    if (!state.has_best_lure_pos)
+        return "none";
+    return state.best_lure_estimated ? "estimated_rod_mid_lure_local" : "raw_lure_simple";
+}
+
+const char* closest_fish_source_name(int source)
+{
+    switch (source) {
+    case 1:
+        return "tracked_instance";
+    case 2:
+        return "logical_lure";
+    case 3:
+        return "fishing_set";
+    case 4:
+        return "fishing_set_guid";
+    default:
+        return "none";
+    }
+}
+
+const char* coordinate_quality(const SensorState& state)
+{
+    if (!state.has_fishing_set || !state.has_fisher || !state.has_rod || !state.has_reel)
+        return "missing_core_probe";
+    if (!state.has_lure)
+        return "missing_lure_complex";
+    if (!state.has_best_lure_pos)
+        return "missing_lure_position";
+    if (state.best_lure_estimated)
+        return "estimated_lure_position";
+    if (state.fish_count > 0 && !state.has_closest_fish)
+        return "fish_position_unresolved";
+    return "ok";
+}
+
+void log_snapshot_quality(const char* reason, const ProbeSet& probe, const SensorState& state)
+{
+    std::ostringstream out;
+    out << "snapshot_quality[" << reason << "]:"
+        << " quality=" << coordinate_quality(state)
+        << " roots=fs:" << (state.has_fishing_set ? 1 : 0)
+        << "/fisher:" << (state.has_fisher ? 1 : 0)
+        << "/rod:" << (state.has_rod ? 1 : 0)
+        << "/reel:" << (state.has_reel ? 1 : 0)
+        << "/lure:" << (state.has_lure ? 1 : 0)
+        << " lure_complex=" << hex_ptr(probe.lure_complex)
+        << " lure_simple=" << hex_u64(state.lure_simple)
+        << " lure_source=" << lure_position_source(state)
+        << " raw_lure=" << format_vec(state.lure_pos)
+        << " est_lure=" << format_vec(state.lure_estimated_pos)
+        << " best_lure=" << format_vec(state.best_lure_pos)
+        << " fish_count=" << state.fish_count
+        << " fish_source=" << closest_fish_source_name(state.closest_fish_source)
+        << " closest_fish=" << hex_u64(state.closest_fish)
+        << " fish_pos=" << format_vec(state.closest_fish_pos)
+        << " dist_fisher_lure=" << std::fixed << std::setprecision(2) << state.fisher_to_lure
+        << " dist_rod_lure=" << std::fixed << std::setprecision(2) << state.rod_tip_to_lure;
+    log_line(out.str());
+}
+
 std::string sensor_summary(const SensorState& state)
 {
     std::ostringstream out;
@@ -1808,6 +1871,8 @@ std::string sensor_summary(const SensorState& state)
         << " reel=" << std::fixed << std::setprecision(3) << state.reel_value
         << " lure=" << format_vec(state.best_lure_pos)
         << (state.best_lure_estimated ? "(est)" : "")
+        << " lureSrc=" << lure_position_source(state)
+        << " q=" << coordinate_quality(state)
         << " rodWorld=" << format_vec(state.rod_mid)
         << " dist(F/L)=" << std::fixed << std::setprecision(1) << state.fisher_to_lure
         << " dist(R/L)=" << std::fixed << std::setprecision(1) << state.rod_tip_to_lure;
@@ -2178,7 +2243,10 @@ void write_coordinate_header(std::ofstream& out)
            "closest_fish,closest_fish_source,fish_x,fish_y,fish_z,"
            "fish_alt_x,fish_alt_y,fish_alt_z,fish_to_lure,fish_to_fisher,"
            "fishing_set_0x150,fishing_set_0x158,fishing_set_0x160,"
-           "rod_load,reel_value,reel_flags\n";
+           "rod_load,reel_value,reel_flags,"
+           "coordinate_quality,lure_position_source,fish_position_source,"
+           "has_fishing_set,has_fisher,has_rod,has_reel,has_lure,"
+           "has_lure_simple,has_best_lure_pos,has_closest_fish\n";
 }
 
 bool log_coordinate_snapshot(const char* reason, const SensorState& state)
@@ -2233,6 +2301,17 @@ bool log_coordinate_snapshot(const char* reason, const SensorState& state)
         << ',' << state.rod_load
         << ',' << state.reel_value
         << ',' << state.reel_state_flags
+        << ',' << coordinate_quality(state)
+        << ',' << lure_position_source(state)
+        << ',' << closest_fish_source_name(state.closest_fish_source)
+        << ',' << (state.has_fishing_set ? 1 : 0)
+        << ',' << (state.has_fisher ? 1 : 0)
+        << ',' << (state.has_rod ? 1 : 0)
+        << ',' << (state.has_reel ? 1 : 0)
+        << ',' << (state.has_lure ? 1 : 0)
+        << ',' << (state.has_lure_simple ? 1 : 0)
+        << ',' << (state.has_best_lure_pos ? 1 : 0)
+        << ',' << (state.has_closest_fish ? 1 : 0)
         << '\n';
 
     return true;
@@ -2298,8 +2377,10 @@ bool log_diagnostic_snapshot(const char* reason)
     out << '\n';
 
     const bool coordinate_ok = log_coordinate_snapshot(reason, sensor);
-    if (std::string(reason) != "periodic")
+    if (std::string(reason) != "periodic") {
+        log_snapshot_quality(reason, probe, sensor);
         log_active_fish_object_map(reason, probe);
+    }
 
     {
         std::lock_guard<std::mutex> lock(g_mutex);
