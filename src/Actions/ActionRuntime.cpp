@@ -134,6 +134,7 @@ struct SensorState {
     uintptr_t logical_fish_guid = 0;
     uintptr_t closest_fish = 0;
     int closest_fish_source = 0;
+    int closest_fish_position_source = 0;
     Vector3 closest_fish_pos{};
     Vector3 closest_fish_alt_pos{};
     float closest_fish_to_lure = 0.0f;
@@ -161,6 +162,13 @@ struct FishVectorCandidate {
 struct FishVectorRoot {
     std::string path;
     uintptr_t object = 0;
+};
+
+struct FishPositionRead {
+    Vector3 value{};
+    Vector3 alternate{};
+    int source = 0;
+    bool has_value = false;
 };
 
 std::atomic_bool g_running{false};
@@ -204,6 +212,10 @@ constexpr uintptr_t k_fish_position_bounds_class_global = 0x3EBCC20;
 constexpr uintptr_t k_lure_simple_state_field = 0x30;
 constexpr uintptr_t k_lure_state_world_position_field = 0xC0;
 constexpr uintptr_t k_lure_simple_legacy_position_field = 0xE8;
+constexpr uintptr_t k_fish_position_child_field = 0x38;
+constexpr uintptr_t k_fish_position_child_world_field = 0xC0;
+constexpr uintptr_t k_fish_position_legacy_primary_field = 0xD8;
+constexpr uintptr_t k_fish_position_legacy_alternate_field = 0xCC;
 
 const char* command_name(fc::actions::Command command);
 ProbeSet capture_probe();
@@ -970,6 +982,49 @@ bool likely_pointer(uintptr_t value)
     if (value < 0x10000)
         return false;
     return readable_memory(value, sizeof(void*));
+}
+
+FishPositionRead read_fish_position(
+    void* fish,
+    bool has_reference,
+    const Vector3& reference)
+{
+    FishPositionRead result{};
+    float best_distance = std::numeric_limits<float>::max();
+
+    auto consider = [&](const std::optional<Vector3>& value, int source) {
+        if (!value || !valid_vector(*value) || near_zero_vector(*value))
+            return;
+
+        const float distance = has_reference ?
+            distance_between(*value, reference) :
+            static_cast<float>(source);
+        if (!result.has_value || distance < best_distance) {
+            best_distance = distance;
+            result.value = *value;
+            result.source = source;
+            result.has_value = true;
+        }
+    };
+
+    const uintptr_t child =
+        read_process_value<uintptr_t>(fish, k_fish_position_child_field).value_or(0);
+    if (likely_pointer(child)) {
+        consider(
+            read_absolute_value<Vector3>(child + k_fish_position_child_world_field),
+            1);
+    }
+
+    const auto primary =
+        read_process_value<Vector3>(fish, k_fish_position_legacy_primary_field);
+    const auto alternate =
+        read_process_value<Vector3>(fish, k_fish_position_legacy_alternate_field);
+    consider(primary, 2);
+    consider(alternate, 3);
+
+    if (alternate && valid_vector(*alternate) && !near_zero_vector(*alternate))
+        result.alternate = *alternate;
+    return result;
 }
 
 std::string lower_copy(std::string value)
@@ -1785,18 +1840,13 @@ SensorState read_sensor_state(const ProbeSet& probe)
         if (!object_is_fish(fish))
             return;
 
-        const Vector3 primary =
-            read_process_value<Vector3>(fish, 0xD8).value_or(Vector3{});
-        const Vector3 alternate =
-            read_process_value<Vector3>(fish, 0xCC).value_or(Vector3{});
-        const bool primary_valid = valid_vector(primary) && !near_zero_vector(primary);
-        const bool alternate_valid = valid_vector(alternate) && !near_zero_vector(alternate);
-        if (!primary_valid && !alternate_valid)
+        const FishPositionRead position =
+            read_fish_position(fish, has_fish_reference, fish_reference);
+        if (!position.has_value)
             return;
 
-        const Vector3 candidate = primary_valid ? primary : alternate;
         const float distance = has_fish_reference ?
-            distance_between(candidate, fish_reference) :
+            distance_between(position.value, fish_reference) :
             0.0f;
 
         if (!state.has_closest_fish || distance < closest_distance) {
@@ -1804,8 +1854,9 @@ SensorState read_sensor_state(const ProbeSet& probe)
             state.has_closest_fish = true;
             state.closest_fish = reinterpret_cast<uintptr_t>(fish);
             state.closest_fish_source = source;
-            state.closest_fish_pos = candidate;
-            state.closest_fish_alt_pos = alternate;
+            state.closest_fish_position_source = position.source;
+            state.closest_fish_pos = position.value;
+            state.closest_fish_alt_pos = position.alternate;
         }
     };
 
@@ -1870,6 +1921,20 @@ const char* closest_fish_source_name(int source)
         return "fishing_set";
     case 4:
         return "fishing_set_guid";
+    default:
+        return "none";
+    }
+}
+
+const char* fish_position_source_name(int source)
+{
+    switch (source) {
+    case 1:
+        return "raw_fish_0x38_0xC0";
+    case 2:
+        return "raw_fish_0xD8";
+    case 3:
+        return "raw_fish_0xCC";
     default:
         return "none";
     }
@@ -2117,6 +2182,7 @@ void log_snapshot_quality(const char* reason, const ProbeSet& probe, const Senso
         << " best_lure=" << format_vec(state.best_lure_pos)
         << " fish_count=" << state.fish_count
         << " fish_source=" << closest_fish_source_name(state.closest_fish_source)
+        << " fish_pos_source=" << fish_position_source_name(state.closest_fish_position_source)
         << " logical_lure=" << hex_u64(state.logical_fish_lure)
         << " logical_set=" << hex_u64(state.logical_fish_set)
         << " logical_guid=" << hex_u64(state.logical_fish_guid)
@@ -2162,6 +2228,7 @@ std::string sensor_summary(const SensorState& state)
     if (state.has_closest_fish) {
         out << " fishPos=" << format_vec(state.closest_fish_pos)
             << " fishSrc=" << state.closest_fish_source
+            << " fishPosSrc=" << fish_position_source_name(state.closest_fish_position_source)
             << " fishL=" << std::fixed << std::setprecision(1) << state.closest_fish_to_lure
             << " fishF=" << std::fixed << std::setprecision(1) << state.closest_fish_to_fisher;
     }
@@ -2571,7 +2638,7 @@ bool log_coordinate_snapshot(const char* reason, const SensorState& state)
         << ',' << state.reel_state_flags
         << ',' << coordinate_quality(state)
         << ',' << lure_position_source(state)
-        << ',' << closest_fish_source_name(state.closest_fish_source)
+        << ',' << fish_position_source_name(state.closest_fish_position_source)
         << ',' << (state.has_fishing_set ? 1 : 0)
         << ',' << (state.has_fisher ? 1 : 0)
         << ',' << (state.has_rod ? 1 : 0)
