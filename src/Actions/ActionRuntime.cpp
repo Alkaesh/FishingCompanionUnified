@@ -150,6 +150,19 @@ struct LureVectorCandidate {
     float dist_to_rod = 0.0f;
 };
 
+struct FishVectorCandidate {
+    std::string path;
+    uintptr_t offset = 0;
+    Vector3 value{};
+    float dist_to_lure = 0.0f;
+    float dist_to_fisher = 0.0f;
+};
+
+struct FishVectorRoot {
+    std::string path;
+    uintptr_t object = 0;
+};
+
 std::atomic_bool g_running{false};
 HANDLE g_thread = nullptr;
 std::mutex g_mutex;
@@ -1974,6 +1987,107 @@ void log_lure_vector_candidates(const char* reason, const ProbeSet& probe, const
     log_line(out.str());
 }
 
+void collect_fish_vector_candidates(
+    std::vector<FishVectorCandidate>& candidates,
+    const std::string& path,
+    uintptr_t base,
+    const SensorState& state,
+    uintptr_t max_offset = 0x240)
+{
+    if (!base)
+        return;
+
+    for (uintptr_t offset = 0x10; offset <= max_offset; offset += sizeof(float)) {
+        const auto value = read_absolute_value<Vector3>(base + offset);
+        if (!value || !valid_vector(*value) || near_zero_vector(*value))
+            continue;
+
+        candidates.push_back(FishVectorCandidate{
+            path,
+            offset,
+            *value,
+            reference_distance(*value, state.best_lure_pos),
+            reference_distance(*value, state.fisher_pos),
+        });
+    }
+}
+
+void collect_fish_child_vector_candidates(
+    std::vector<FishVectorCandidate>& candidates,
+    const std::string& root,
+    uintptr_t base,
+    const SensorState& state)
+{
+    if (!base)
+        return;
+
+    for (uintptr_t offset = 0x10; offset <= 0x240; offset += sizeof(uintptr_t)) {
+        const uintptr_t child = read_absolute_value<uintptr_t>(base + offset).value_or(0);
+        if (!likely_pointer(child))
+            continue;
+
+        collect_fish_vector_candidates(
+            candidates,
+            append_offset_path(root, offset),
+            child,
+            state,
+            0x180);
+    }
+}
+
+float fish_candidate_score(const FishVectorCandidate& candidate)
+{
+    if (candidate.dist_to_lure != std::numeric_limits<float>::max())
+        return candidate.dist_to_lure;
+    return candidate.dist_to_fisher;
+}
+
+void log_fish_vector_candidates(const char* reason, const SensorState& state)
+{
+    std::vector<FishVectorRoot> roots;
+    std::unordered_set<uintptr_t> seen;
+    auto add_root = [&](const std::string& path, uintptr_t object) {
+        if (!likely_pointer(object) || seen.find(object) != seen.end())
+            return;
+        seen.insert(object);
+        roots.push_back(FishVectorRoot{path, object});
+    };
+
+    for (size_t i = 0; i < g_fish_instances.size() && i < 4; ++i) {
+        add_root("tracked[" + std::to_string(i) + "]",
+                 reinterpret_cast<uintptr_t>(g_fish_instances[i]));
+    }
+    add_root("logical_lure", state.logical_fish_lure);
+    add_root("logical_set", state.logical_fish_set);
+    add_root("logical_guid", state.logical_fish_guid);
+    add_root("closest", state.closest_fish);
+
+    std::vector<FishVectorCandidate> candidates;
+    candidates.reserve(256);
+    for (const auto& root : roots) {
+        collect_fish_vector_candidates(candidates, root.path, root.object, state);
+        collect_fish_child_vector_candidates(candidates, root.path, root.object, state);
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        return fish_candidate_score(left) < fish_candidate_score(right);
+    });
+
+    std::ostringstream out;
+    out << "fish_vector_candidates[" << reason << "]: roots=" << roots.size()
+        << " count=" << candidates.size();
+    const size_t limit = std::min<size_t>(candidates.size(), 8);
+    for (size_t i = 0; i < limit; ++i) {
+        const auto& candidate = candidates[i];
+        out << " " << candidate.path
+            << "+0x" << std::uppercase << std::hex << candidate.offset << std::dec
+            << "=" << format_vec(candidate.value)
+            << " dL=" << std::fixed << std::setprecision(2) << candidate.dist_to_lure
+            << " dF=" << candidate.dist_to_fisher;
+    }
+    log_line(out.str());
+}
+
 void log_snapshot_quality(const char* reason, const ProbeSet& probe, const SensorState& state)
 {
     std::ostringstream out;
@@ -1998,6 +2112,7 @@ void log_snapshot_quality(const char* reason, const ProbeSet& probe, const Senso
         << " dist_rod_lure=" << std::fixed << std::setprecision(2) << state.rod_tip_to_lure;
     log_line(out.str());
     log_lure_vector_candidates(reason, probe, state);
+    log_fish_vector_candidates(reason, state);
 }
 
 std::string sensor_summary(const SensorState& state)
