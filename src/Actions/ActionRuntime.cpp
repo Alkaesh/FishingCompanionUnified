@@ -883,7 +883,18 @@ void scan_fish_instances(bool force = false)
         return;
     }
 
+    const size_t previous_count = g_fish_instances.size();
     g_fish_instances = game_actions::find_all_fish();
+    if (force || previous_count != g_fish_instances.size()) {
+        std::ostringstream out;
+        out << "fish_scan: force=" << (force ? 1 : 0)
+            << " found=" << g_fish_instances.size();
+        const size_t limit = std::min<size_t>(g_fish_instances.size(), 4);
+        for (size_t i = 0; i < limit; ++i) {
+            out << " fish[" << i << "]=" << hex_ptr(g_fish_instances[i]);
+        }
+        log_line(out.str());
+    }
 }
 
 template <typename T>
@@ -2106,6 +2117,9 @@ void log_snapshot_quality(const char* reason, const ProbeSet& probe, const Senso
         << " best_lure=" << format_vec(state.best_lure_pos)
         << " fish_count=" << state.fish_count
         << " fish_source=" << closest_fish_source_name(state.closest_fish_source)
+        << " logical_lure=" << hex_u64(state.logical_fish_lure)
+        << " logical_set=" << hex_u64(state.logical_fish_set)
+        << " logical_guid=" << hex_u64(state.logical_fish_guid)
         << " closest_fish=" << hex_u64(state.closest_fish)
         << " fish_pos=" << format_vec(state.closest_fish_pos)
         << " dist_fisher_lure=" << std::fixed << std::setprecision(2) << state.fisher_to_lure
@@ -3479,7 +3493,7 @@ bool perform_fish_scan()
 {
     scan_fish_instances(true);
     const SensorState state = refresh_sensor_status();
-    const bool ok = log_coordinate_snapshot("scan_fish", state);
+    const bool ok = log_diagnostic_snapshot("scan_fish");
 
     std::lock_guard<std::mutex> lock(g_mutex);
     g_status.message = std::string("fish scanned: ") +

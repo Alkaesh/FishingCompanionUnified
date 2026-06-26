@@ -351,6 +351,7 @@ $observedByLog = $logLines | Where-Object { $_ -match "^$([regex]::Escape($canon
 $snapshotQualityByLog = $logLines | Where-Object { $_ -match "^snapshot_quality\[" } | Select-Object -Last 1
 $lureCandidatesByLog = $logLines | Where-Object { $_ -match "^lure_vector_candidates\[" } | Select-Object -Last 1
 $fishCandidatesByLog = $logLines | Where-Object { $_ -match "^fish_vector_candidates\[" } | Select-Object -Last 1
+$fishScanByLog = $logLines | Where-Object { $_ -match "^fish_scan:" } | Select-Object -Last 1
 
 $stateChanged =
     ([Math]::Abs($distanceDelta) -ge 0.05) -or
@@ -479,6 +480,7 @@ $record = [ordered]@{
         snapshot_quality_line = [string]$snapshotQualityByLog
         lure_candidates_line = [string]$lureCandidatesByLog
         fish_candidates_line = [string]$fishCandidatesByLog
+        fish_scan_line = [string]$fishScanByLog
         new_log_tail = @($logLines | Select-Object -Last 20)
     }
 }
@@ -504,6 +506,7 @@ $latest = @(
     "quality: $($record.runtime.snapshot_quality_line)"
     "lure_candidates: $($record.runtime.lure_candidates_line)"
     "fish_candidates: $($record.runtime.fish_candidates_line)"
+    "fish_scan: $($record.runtime.fish_scan_line)"
     "runtime: $($record.runtime.result_line)"
     "observed: $($record.runtime.observed_line)"
     "jsonl: $TestLog"
