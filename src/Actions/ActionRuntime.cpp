@@ -188,6 +188,7 @@ std::chrono::steady_clock::time_point g_next_diagnostic_snapshot{};
 std::atomic_bool g_auto_reel_enabled{false};
 std::atomic_ullong g_auto_reel_ticks{0};
 std::chrono::steady_clock::time_point g_next_auto_reel_tick{};
+std::chrono::steady_clock::time_point g_next_auto_result_choice{};
 bool g_has_marked_spot = false;
 Vector3 g_marked_spot{};
 std::vector<void*> g_fish_instances;
@@ -225,6 +226,7 @@ constexpr size_t kMaxRecentEvents = 80;
 
 const char* command_name(fc::actions::Command command);
 ProbeSet capture_probe();
+void perform_continue_fishing(const ActionSet& actions);
 
 std::wstring process_directory()
 {
@@ -3209,6 +3211,18 @@ bool has_detected_fish(const SensorState& state)
         state.logical_fish_rig != 0;
 }
 
+bool is_likely_catch_result_screen(const SensorState& state)
+{
+    const bool has_fish_signal = state.fish_count > 0 || has_detected_fish(state);
+    const bool tackle_home =
+        state.has_best_lure_pos &&
+        state.rod_tip_to_lure >= 0.0f &&
+        state.rod_tip_to_lure <= 0.75f &&
+        state.fisher_to_lure >= 0.5f &&
+        state.fisher_to_lure <= 4.0f;
+    return has_fish_signal && tackle_home && state.fishing_set_160 == 0x800;
+}
+
 using SpawnActiveFishFn = uintptr_t (*)(SystemGuid*, void*);
 
 bool guarded_active_fish_spawn_call(
@@ -3551,8 +3565,6 @@ void toggle_auto_reel()
 
 void maybe_auto_reel(const ActionSet& actions)
 {
-    (void)actions;
-
     if (!g_auto_reel_enabled.load())
         return;
 
@@ -3561,6 +3573,25 @@ void maybe_auto_reel(const ActionSet& actions)
         return;
 
     const SensorState before = refresh_sensor_status();
+    if (is_likely_catch_result_screen(before)) {
+        if (g_next_auto_result_choice.time_since_epoch().count() != 0 &&
+            now < g_next_auto_result_choice) {
+            update_auto_reel_status("auto reel waiting after catch result");
+            return;
+        }
+
+        g_next_auto_result_choice = now + std::chrono::seconds(15);
+        std::ostringstream out;
+        out << "auto_reel: catch result detected; accepting keep_fish"
+            << " fish=" << before.fish_count
+            << " dist_rod_lure=" << std::fixed << std::setprecision(2) << before.rod_tip_to_lure
+            << " dist_fisher_lure=" << before.fisher_to_lure
+            << " flags=" << hex_u64(before.fishing_set_160);
+        log_line(out.str());
+        perform_continue_fishing(actions);
+        return;
+    }
+
     const bool active_fishing =
         before.fishing_set_150 != 0 ||
         before.fishing_set_158 != 0 ||
