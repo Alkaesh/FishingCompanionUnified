@@ -33,12 +33,49 @@ instead of silently claiming a gameplay effect.
 
 - `auto_cast`: `SwitchThrowMode` -> `ChangeThrowDistance` -> `Hitch` -> `StartHooking`
 - `auto_catch`: runs `auto_cast`, enables adaptive `auto_reel`, then writes a diagnostic snapshot
+- `auto_fish`: **full autonomous fishing FSM** (see below) — separate from the legacy auto_reel timer
 - `auto_scout`: runs `auto_cast`, enables diagnostics, marks the current lure/rod position, then writes a diagnostic snapshot
-- `stop_all`: disables `auto_reel`, disables periodic diagnostics, then tries `ReturnToIdle`
+- `stop_all`: disables `auto_fish`, disables `auto_reel`, disables periodic diagnostics, then tries `ReturnToIdle`
 - `auto_reel`: pulses `ManualRoll`; while fishing state is active it uses a faster interval and periodic `ManualRollBoost`
 - `mark_spot`: stores the current lure position; falls back to the rod tip when the lure position is not valid
 - `clear_spot`: clears the marked spot and removes spot-distance tracking
 - `scan_fish`: refreshes all live `Fish` instances and writes the closest fish position/distance snapshot
+
+## Auto Fish FSM (`auto_fish`)
+
+A dedicated state machine in `ActionRuntime.cpp` (`perform_auto_fish_tick`) that
+runs every worker-loop iteration while enabled. It is independent of the legacy
+`auto_reel` timer: when `auto_fish` is on it owns the reel and forces
+`auto_reel` off so the two never fight over `ManualRoll`.
+
+Phases (`AutoFishPhase`):
+
+1. `idle` -> `cast`
+2. `cast`      : runs `perform_auto_cast`; on success captures the resting rod
+   load as the bite-detection baseline, waits `post_cast_wait_ms`, -> `wait_bite`
+3. `wait_bite` : declares a **bite** when `Rod+0x110` (rod load) exceeds
+   `baseline + bite_load_threshold` for `bite_confirm_ms` ms (debounced). Times
+   out to a re-cast after `bite_timeout_s`. -> `hooked`
+4. `hooked`    : sets the hook (foreground mouse hold + `StartHooking` pulse)
+   for `hook_hold_ms`. -> `fight`
+5. `fight`     : reels at maximum speed (`ManualRollBoost` + RMB/LMB fight hold).
+   When the rod load reaches `fight_load_danger` it **eases off** for ~450 ms so
+   the line tension does not snap the tackle (manual load control). On
+   `is_likely_catch_result_screen` -> `catch_result`.
+6. `catch_result`: accepts the fish (`perform_continue_fishing`, which also
+   re-casts), increments the cycle counter, cools down `cycle_cooldown_ms`, ->
+   `idle` (the FSM owns the next cast).
+
+Controls:
+
+- GUI: **Auto Fish** button in the Automation group (Start/Stop), plus a live
+  status line (state / cycles / rod load) and an **Auto Fish** tuning section in
+  the Settings tab (all thresholds are runtime-adjustable and clamped).
+- Hotkey: `F9` by default (configurable in Settings -> Hotkeys). Toggles the FSM
+  hands-free, even with the menu closed, via `actions::SetAutoFish`.
+- Command file: `auto_fish` / `autofish` / `toggle_auto_fish` alias.
+- Public API: `fc::actions::SetAutoFish`, `IsAutoFishEnabled`,
+  `GetAutoFishParams`, `SetAutoFishParams` (struct `AutoFishParams`).
 
 ## Runtime Verification
 

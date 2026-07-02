@@ -12,6 +12,7 @@ out/
 
 # Local runtime/test artifacts
 test_logs/
+evidence/
 evidence/screens/
 *.log
 *_actions.jsonl

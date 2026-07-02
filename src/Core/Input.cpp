@@ -1,21 +1,28 @@
 // ============================================================================
-//  Input.cpp — обработка горячих клавиш модуля.
+//  Input.cpp - overlay hotkey handling.
 // ============================================================================
 
 #include "Input.h"
 #include "Overlay.h"
+#include "../Actions/ActionRuntime.h"
 
 namespace fc {
 
 int& Input::ToggleKey()
 {
-    static int key = VK_INSERT; // Клавиша вызова меню по умолчанию.
+    static int key = VK_INSERT; // Default menu toggle key.
     return key;
 }
 
 int& Input::UnloadKey()
 {
-    static int key = VK_END;    // Клавиша выгрузки модуля.
+    static int key = VK_END;    // Default module unload key.
+    return key;
+}
+
+int& Input::AutoFishKey()
+{
+    static int key = VK_F9;     // Default AutoFish toggle key.
     return key;
 }
 
@@ -25,10 +32,11 @@ bool Input::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         return false;
 
     const int key = static_cast<int>(wParam);
-    const bool isHotkey = (key == ToggleKey() || key == UnloadKey());
+    const bool isHotkey = (key == ToggleKey() || key == UnloadKey() || key == AutoFishKey());
     if (!isHotkey)
         return false;
 
+    // Suppress key auto-repeat: only act on the initial press.
     if ((static_cast<unsigned long long>(lParam) & (1ull << 30)) != 0)
         return true;
 
@@ -44,8 +52,14 @@ bool Input::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         return true;
     }
 
-    // TODO: здесь же можно опрашивать пользовательские хоткеи из Keybinder,
-    //       чтобы скрывать/показывать отдельные элементы HUD.
+    if (key == AutoFishKey())
+    {
+        // Toggle the autonomous fishing FSM directly. This works even before
+        // the menu is open, so fishing can be started hands-free.
+        actions::SetAutoFish(!actions::IsAutoFishEnabled());
+        return true;
+    }
+
     return false;
 }
 

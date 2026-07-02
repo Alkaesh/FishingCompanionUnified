@@ -123,16 +123,33 @@ struct SensorState {
     bool has_lure = false;
     bool has_lure_simple = false;
     bool has_best_lure_pos = false;
+    bool lure_pos_from_child = false;
     bool best_lure_estimated = false;
     bool has_marked_spot = false;
     size_t fish_count = 0;
     uintptr_t fishing_setup = 0;
     uintptr_t fish_bite_meta = 0;
+    // FishingSet live state. From the IL2CPP dump:
+    //   +0x60/+0x61 : bool flags (set activity)
+    //   +0x68       : Synth_5570_Closure moabncmfjej (fishing setup/closure)
+    //   +0x88/+0x89/+0x8A : bool flags (bite/fight activity candidates)
+    //   +0x90       : RigConnector imdaclihign (tackle/rig)
+    //   +0x100      : InteractiveRod oljcldkhomf (the rod currently in hand;
+    //                 0 when no rod is held => cast/hook is impossible)
+    uintptr_t interactive_rod = 0;
+    uintptr_t rig_connector_field = 0;
+    bool fishing_set_flag_0x60 = false;
+    bool fishing_set_flag_0x61 = false;
+    bool fishing_set_flag_0x88 = false;
+    bool fishing_set_flag_0x89 = false;
+    bool fishing_set_flag_0x8A = false;
     uintptr_t logical_fish_lure = 0;
     uintptr_t logical_fish_set = 0;
     uintptr_t logical_fish_guid = 0;
+    uintptr_t logical_fish_rig = 0;
     uintptr_t closest_fish = 0;
     int closest_fish_source = 0;
+    int closest_fish_position_source = 0;
     Vector3 closest_fish_pos{};
     Vector3 closest_fish_alt_pos{};
     float closest_fish_to_lure = 0.0f;
@@ -140,11 +157,42 @@ struct SensorState {
     bool has_closest_fish = false;
 };
 
+struct LureVectorCandidate {
+    std::string path;
+    uintptr_t offset = 0;
+    Vector3 value{};
+    float dist_to_estimated = 0.0f;
+    float dist_to_fisher = 0.0f;
+    float dist_to_rod = 0.0f;
+};
+
+struct FishVectorCandidate {
+    std::string path;
+    uintptr_t offset = 0;
+    Vector3 value{};
+    float dist_to_lure = 0.0f;
+    float dist_to_fisher = 0.0f;
+};
+
+struct FishVectorRoot {
+    std::string path;
+    uintptr_t object = 0;
+};
+
+struct FishPositionRead {
+    Vector3 value{};
+    Vector3 alternate{};
+    int source = 0;
+    bool has_value = false;
+};
+
 std::atomic_bool g_running{false};
 HANDLE g_thread = nullptr;
 std::mutex g_mutex;
+std::mutex g_recent_events_mutex;
 std::condition_variable g_cv;
 std::deque<fc::actions::Command> g_queue;
+std::deque<std::string> g_recent_events;
 fc::actions::Status g_status;
 ActionSet g_actions;
 ProbeSet g_probe;
@@ -154,10 +202,39 @@ std::chrono::steady_clock::time_point g_next_diagnostic_snapshot{};
 std::atomic_bool g_auto_reel_enabled{false};
 std::atomic_ullong g_auto_reel_ticks{0};
 std::chrono::steady_clock::time_point g_next_auto_reel_tick{};
+std::chrono::steady_clock::time_point g_next_auto_result_choice{};
+WPARAM g_posted_mouse_buttons = 0;
+WPARAM g_posted_key_modifiers = 0;
 bool g_has_marked_spot = false;
 Vector3 g_marked_spot{};
 std::vector<void*> g_fish_instances;
 std::chrono::steady_clock::time_point g_next_fish_scan{};
+
+// --- Autonomous fishing FSM (AutoFish) -------------------------------------
+// A self-contained state machine that casts, waits for a bite (detected from
+// the rod load), sets the hook, fights the fish while managing line tension,
+// accepts the catch result, then repeats. It is intentionally separate from
+// the legacy auto_reel timer so both can coexist; when AutoFish is on it owns
+// the reel and the legacy auto_reel is kept off.
+std::atomic_bool g_auto_fish_enabled{false};
+fc::actions::AutoFishParams g_auto_fish_params{};
+std::mutex g_auto_fish_params_mutex;
+
+enum class AutoFishPhase {
+    Idle,
+    Cast,
+    WaitBite,
+    Hooked,
+    Fight,
+    CatchResult,
+};
+
+AutoFishPhase g_auto_fish_phase = AutoFishPhase::Idle;
+std::chrono::steady_clock::time_point g_auto_fish_phase_since{};
+std::chrono::steady_clock::time_point g_auto_fish_bite_since{};
+bool g_auto_fish_bite_armed = false;   // load exceeded threshold, confirming
+float g_auto_fish_baseline_load = 0.0f;
+std::atomic_ullong g_auto_fish_cycles{0};
 
 constexpr uintptr_t k_synth_1402_pfokppcgekh_method = 0x810F30;
 constexpr uintptr_t k_synth_1402_bjkkdngcmfm_method = 0x814BD0;
@@ -166,6 +243,7 @@ constexpr uintptr_t k_synth_5570_string_ctor_method = 0x11B5DB0;
 constexpr uintptr_t k_fishing_set_setup_field = 0x68;
 constexpr uintptr_t k_synth_5570_fish_bite_meta_field = 0x30;
 constexpr uintptr_t k_fishing_set_rig_connector_field = 0x90;
+constexpr uintptr_t k_rig_connector_active_fish_field = 0x60;
 constexpr uintptr_t k_fish_bite_meta_owner_value_field = 0x20;
 constexpr uintptr_t k_codegen_init_runtime_metadata_method = 0x328770;
 constexpr uintptr_t k_internal_object_new_method = 0x35BFF0;
@@ -178,9 +256,21 @@ constexpr uintptr_t k_synth_1402_class_global = 0x3EB76D0;
 constexpr uintptr_t k_fish_spawn_mode_class_global = 0x3ED92C0;
 constexpr uintptr_t k_fish_position_source_class_global = 0x3EBCC18;
 constexpr uintptr_t k_fish_position_bounds_class_global = 0x3EBCC20;
+constexpr uintptr_t k_lure_simple_state_field = 0x30;
+constexpr uintptr_t k_lure_state_world_position_field = 0xC0;
+constexpr uintptr_t k_lure_simple_legacy_position_field = 0xE8;
+constexpr uintptr_t k_fish_position_child_field = 0x38;
+constexpr uintptr_t k_fish_position_alt_child_field = 0x50;
+constexpr uintptr_t k_fish_position_child_world_field = 0xC0;
+constexpr uintptr_t k_fish_position_legacy_primary_field = 0xD8;
+constexpr uintptr_t k_fish_position_legacy_alternate_field = 0xCC;
+constexpr size_t kMaxRecentEvents = 80;
 
 const char* command_name(fc::actions::Command command);
 ProbeSet capture_probe();
+void perform_continue_fishing(const ActionSet& actions);
+HWND find_process_window();
+bool is_process_window_foreground();
 
 std::wstring process_directory()
 {
@@ -191,8 +281,33 @@ std::wstring process_directory()
     return pos == std::wstring::npos ? L"." : value.substr(0, pos);
 }
 
+void remember_event(const std::string& text)
+{
+    if (text.empty())
+        return;
+
+    std::lock_guard<std::mutex> lock(g_recent_events_mutex);
+    g_recent_events.push_back(text);
+    while (g_recent_events.size() > kMaxRecentEvents)
+        g_recent_events.pop_front();
+}
+
+void clear_recent_events()
+{
+    std::lock_guard<std::mutex> lock(g_recent_events_mutex);
+    g_recent_events.clear();
+}
+
+std::vector<std::string> recent_events_snapshot()
+{
+    std::lock_guard<std::mutex> lock(g_recent_events_mutex);
+    return std::vector<std::string>(g_recent_events.begin(), g_recent_events.end());
+}
+
 void log_line(const std::string& text)
 {
+    remember_event(text);
+
     const std::filesystem::path path =
         std::filesystem::path(process_directory()) / L"FishingCompanion_actions.log";
     std::ofstream out(path, std::ios::out | std::ios::app);
@@ -278,6 +393,8 @@ std::optional<fc::actions::Command> command_from_text(const std::string& raw)
         return fc::actions::Command::AutoCatch;
     if (text == "auto_scout" || text == "autoscout" || text == "scout_cast")
         return fc::actions::Command::AutoScout;
+    if (text == "auto_fish" || text == "autofish" || text == "toggle_auto_fish")
+        return fc::actions::Command::ToggleAutoFish;
     if (text == "stop_all" || text == "stop")
         return fc::actions::Command::StopAll;
     if (text == "mark_spot" || text == "mark")
@@ -328,6 +445,12 @@ std::optional<fc::actions::Command> command_from_text(const std::string& raw)
         return fc::actions::Command::SnapshotDiagnostics;
     if (text == "toggle_diagnostics" || text == "diagnostics")
         return fc::actions::Command::ToggleDiagnostics;
+    if (text == "keep_fish" || text == "fish_keep" || text == "to_keepnet" || text == "sadok")
+        return fc::actions::Command::KeepFish;
+    if (text == "release_fish" || text == "fish_release" || text == "release" || text == "otpustit")
+        return fc::actions::Command::ReleaseFish;
+    if (text == "continue_fishing" || text == "keep_and_cast" || text == "keep_and_catch" || text == "continue")
+        return fc::actions::Command::ContinueFishing;
 
     return std::nullopt;
 }
@@ -362,6 +485,8 @@ void process_command_file()
         g_status.auto_reel_enabled = g_auto_reel_enabled;
         g_status.auto_reel_ticks = g_auto_reel_ticks;
     }
+
+    remember_event(std::string("queued from file: ") + command_name(*command));
 }
 
 void set_message(const std::string& message)
@@ -420,6 +545,8 @@ const char* command_name(fc::actions::Command command)
         return "auto_catch";
     case fc::actions::Command::AutoScout:
         return "auto_scout";
+    case fc::actions::Command::ToggleAutoFish:
+        return "auto_fish";
     case fc::actions::Command::StopAll:
         return "stop_all";
     case fc::actions::Command::MarkSpot:
@@ -470,6 +597,12 @@ const char* command_name(fc::actions::Command command)
         return "snapshot_diagnostics";
     case fc::actions::Command::ToggleDiagnostics:
         return "toggle_diagnostics";
+    case fc::actions::Command::KeepFish:
+        return "keep_fish";
+    case fc::actions::Command::ReleaseFish:
+        return "release_fish";
+    case fc::actions::Command::ContinueFishing:
+        return "continue_fishing";
     }
 
     return "unknown";
@@ -857,7 +990,18 @@ void scan_fish_instances(bool force = false)
         return;
     }
 
+    const size_t previous_count = g_fish_instances.size();
     g_fish_instances = game_actions::find_all_fish();
+    if (force || previous_count != g_fish_instances.size()) {
+        std::ostringstream out;
+        out << "fish_scan: force=" << (force ? 1 : 0)
+            << " found=" << g_fish_instances.size();
+        const size_t limit = std::min<size_t>(g_fish_instances.size(), 4);
+        for (size_t i = 0; i < limit; ++i) {
+            out << " fish[" << i << "]=" << hex_ptr(g_fish_instances[i]);
+        }
+        log_line(out.str());
+    }
 }
 
 template <typename T>
@@ -933,6 +1077,54 @@ bool likely_pointer(uintptr_t value)
     if (value < 0x10000)
         return false;
     return readable_memory(value, sizeof(void*));
+}
+
+FishPositionRead read_fish_position(
+    void* fish,
+    bool has_reference,
+    const Vector3& reference)
+{
+    FishPositionRead result{};
+    float best_distance = std::numeric_limits<float>::max();
+
+    auto consider = [&](const std::optional<Vector3>& value, int source) {
+        if (!value || !valid_vector(*value) || near_zero_vector(*value))
+            return;
+
+        const float distance = has_reference ?
+            distance_between(*value, reference) :
+            static_cast<float>(source);
+        if (!result.has_value || distance < best_distance) {
+            best_distance = distance;
+            result.value = *value;
+            result.source = source;
+            result.has_value = true;
+        }
+    };
+
+    auto consider_child_position = [&](uintptr_t field, int source) {
+        const uintptr_t child =
+            read_process_value<uintptr_t>(fish, field).value_or(0);
+        if (!likely_pointer(child))
+            return;
+        consider(
+            read_absolute_value<Vector3>(child + k_fish_position_child_world_field),
+            source);
+    };
+
+    consider_child_position(k_fish_position_child_field, 1);
+    consider_child_position(k_fish_position_alt_child_field, 4);
+
+    const auto primary =
+        read_process_value<Vector3>(fish, k_fish_position_legacy_primary_field);
+    const auto alternate =
+        read_process_value<Vector3>(fish, k_fish_position_legacy_alternate_field);
+    consider(primary, 2);
+    consider(alternate, 3);
+
+    if (alternate && valid_vector(*alternate) && !near_zero_vector(*alternate))
+        result.alternate = *alternate;
+    return result;
 }
 
 std::string lower_copy(std::string value)
@@ -1680,7 +1872,22 @@ SensorState read_sensor_state(const ProbeSet& probe)
     state.lure_simple = read_process_value<uintptr_t>(probe.lure_complex, 0x38).value_or(0);
     state.has_lure_simple = state.lure_simple != 0;
     if (state.lure_simple) {
-        state.lure_pos = read_absolute_value<Vector3>(state.lure_simple + 0xE8).value_or(Vector3{});
+        const uintptr_t lure_state =
+            read_absolute_value<uintptr_t>(
+                state.lure_simple + k_lure_simple_state_field).value_or(0);
+        std::optional<Vector3> child_lure_pos;
+        if (lure_state) {
+            child_lure_pos =
+                read_absolute_value<Vector3>(lure_state + k_lure_state_world_position_field);
+        }
+        if (child_lure_pos && valid_vector(*child_lure_pos) && !near_zero_vector(*child_lure_pos)) {
+            state.lure_pos = *child_lure_pos;
+            state.lure_pos_from_child = true;
+        } else {
+            state.lure_pos =
+                read_absolute_value<Vector3>(
+                    state.lure_simple + k_lure_simple_legacy_position_field).value_or(Vector3{});
+        }
         state.lure_velocity = read_absolute_value<Vector3>(state.lure_simple + 0xF4).value_or(Vector3{});
     }
     state.lure_estimated_pos = add_vectors(state.rod_mid, state.lure_local);
@@ -1710,8 +1917,33 @@ SensorState read_sensor_state(const ProbeSet& probe)
                 state.fishing_setup + k_synth_5570_fish_bite_meta_field).value_or(0);
     }
 
+    // Live FishingSet state flags and references. The interactive rod
+    // (FishingSet+0x100) is the key readiness signal: it is 0 until the player
+    // actually holds an assembled rod, so a cast is impossible while it is 0.
+    state.interactive_rod =
+        read_process_value<uintptr_t>(probe.fishing_set, 0x100).value_or(0);
+    state.rig_connector_field =
+        read_process_value<uintptr_t>(probe.fishing_set, 0x90).value_or(0);
+    state.fishing_set_flag_0x60 =
+        read_process_value<uint8_t>(probe.fishing_set, 0x60).value_or(0) != 0;
+    state.fishing_set_flag_0x61 =
+        read_process_value<uint8_t>(probe.fishing_set, 0x61).value_or(0) != 0;
+    state.fishing_set_flag_0x88 =
+        read_process_value<uint8_t>(probe.fishing_set, 0x88).value_or(0) != 0;
+    state.fishing_set_flag_0x89 =
+        read_process_value<uint8_t>(probe.fishing_set, 0x89).value_or(0) != 0;
+    state.fishing_set_flag_0x8A =
+        read_process_value<uint8_t>(probe.fishing_set, 0x8A).value_or(0) != 0;
+
     state.fish_count = g_fish_instances.size();
     state.logical_fish_lure = read_process_value<uintptr_t>(probe.lure_complex, 0x58).value_or(0);
+    const uintptr_t rig_connector =
+        read_process_value<uintptr_t>(probe.fishing_set, k_fishing_set_rig_connector_field)
+            .value_or(0);
+    state.logical_fish_rig = rig_connector ?
+        read_absolute_value<uintptr_t>(rig_connector + k_rig_connector_active_fish_field)
+            .value_or(0) :
+        0;
     state.logical_fish_set = fishing_set_active_fish(probe.fishing_set);
     if (const auto guid = fishing_set_guid(probe.fishing_set))
         state.logical_fish_guid = fish_from_guid(*guid);
@@ -1733,18 +1965,13 @@ SensorState read_sensor_state(const ProbeSet& probe)
         if (!object_is_fish(fish))
             return;
 
-        const Vector3 primary =
-            read_process_value<Vector3>(fish, 0xD8).value_or(Vector3{});
-        const Vector3 alternate =
-            read_process_value<Vector3>(fish, 0xCC).value_or(Vector3{});
-        const bool primary_valid = valid_vector(primary) && !near_zero_vector(primary);
-        const bool alternate_valid = valid_vector(alternate) && !near_zero_vector(alternate);
-        if (!primary_valid && !alternate_valid)
+        const FishPositionRead position =
+            read_fish_position(fish, has_fish_reference, fish_reference);
+        if (!position.has_value)
             return;
 
-        const Vector3 candidate = primary_valid ? primary : alternate;
         const float distance = has_fish_reference ?
-            distance_between(candidate, fish_reference) :
+            distance_between(position.value, fish_reference) :
             0.0f;
 
         if (!state.has_closest_fish || distance < closest_distance) {
@@ -1752,8 +1979,9 @@ SensorState read_sensor_state(const ProbeSet& probe)
             state.has_closest_fish = true;
             state.closest_fish = reinterpret_cast<uintptr_t>(fish);
             state.closest_fish_source = source;
-            state.closest_fish_pos = candidate;
-            state.closest_fish_alt_pos = alternate;
+            state.closest_fish_position_source = position.source;
+            state.closest_fish_pos = position.value;
+            state.closest_fish_alt_pos = position.alternate;
         }
     };
 
@@ -1763,6 +1991,7 @@ SensorState read_sensor_state(const ProbeSet& probe)
     consider_fish(reinterpret_cast<void*>(state.logical_fish_lure), 2);
     consider_fish(reinterpret_cast<void*>(state.logical_fish_set), 3);
     consider_fish(reinterpret_cast<void*>(state.logical_fish_guid), 4);
+    consider_fish(reinterpret_cast<void*>(state.logical_fish_rig), 5);
 
     if (state.has_closest_fish) {
         if (state.has_best_lure_pos)
@@ -1798,6 +2027,306 @@ SensorState read_sensor_state(const ProbeSet& probe)
     return state;
 }
 
+const char* lure_position_source(const SensorState& state)
+{
+    if (!state.has_best_lure_pos)
+        return "none";
+    if (state.lure_pos_from_child)
+        return "raw_lure_simple_0x30_0xC0";
+    return state.best_lure_estimated ? "estimated_rod_mid_lure_local" : "raw_lure_simple";
+}
+
+const char* closest_fish_source_name(int source)
+{
+    switch (source) {
+    case 1:
+        return "tracked_instance";
+    case 2:
+        return "logical_lure";
+    case 3:
+        return "fishing_set";
+    case 4:
+        return "fishing_set_guid";
+    case 5:
+        return "rig_connector";
+    default:
+        return "none";
+    }
+}
+
+const char* fish_position_source_name(int source)
+{
+    switch (source) {
+    case 1:
+        return "raw_fish_0x38_0xC0";
+    case 2:
+        return "raw_fish_0xD8";
+    case 3:
+        return "raw_fish_0xCC";
+    case 4:
+        return "raw_fish_0x50_0xC0";
+    default:
+        return "none";
+    }
+}
+
+const char* coordinate_quality(const SensorState& state)
+{
+    if (!state.has_fishing_set || !state.has_fisher || !state.has_rod || !state.has_reel)
+        return "missing_core_probe";
+    if (!state.has_lure)
+        return "missing_lure_complex";
+    if (!state.has_best_lure_pos)
+        return "missing_lure_position";
+    if (state.best_lure_estimated)
+        return "estimated_lure_position";
+    if (state.fish_count > 0 && !state.has_closest_fish)
+        return "fish_position_unresolved";
+    return "ok";
+}
+
+float reference_distance(const Vector3& value, const Vector3& reference)
+{
+    if (!valid_vector(reference) || near_zero_vector(reference))
+        return std::numeric_limits<float>::max();
+    return distance_between(value, reference);
+}
+
+void collect_lure_vector_candidates(
+    std::vector<LureVectorCandidate>& candidates,
+    const std::string& path,
+    uintptr_t base,
+    const SensorState& state,
+    uintptr_t max_offset = 0x240)
+{
+    if (!base)
+        return;
+
+    for (uintptr_t offset = 0x10; offset <= max_offset; offset += sizeof(float)) {
+        const auto value = read_absolute_value<Vector3>(base + offset);
+        if (!value || !valid_vector(*value) || near_zero_vector(*value))
+            continue;
+
+        candidates.push_back(LureVectorCandidate{
+            path,
+            offset,
+            *value,
+            reference_distance(*value, state.lure_estimated_pos),
+            reference_distance(*value, state.fisher_pos),
+            reference_distance(*value, state.rod_mid),
+        });
+    }
+}
+
+std::string append_offset_path(const std::string& root, uintptr_t offset)
+{
+    std::ostringstream out;
+    out << root << "+0x" << std::uppercase << std::hex << offset << "->child";
+    return out.str();
+}
+
+void collect_lure_child_vector_candidates(
+    std::vector<LureVectorCandidate>& candidates,
+    const std::string& root,
+    uintptr_t base,
+    const SensorState& state)
+{
+    if (!base)
+        return;
+
+    for (uintptr_t offset = 0x10; offset <= 0x240; offset += sizeof(uintptr_t)) {
+        const uintptr_t child = read_absolute_value<uintptr_t>(base + offset).value_or(0);
+        if (!likely_pointer(child))
+            continue;
+
+        collect_lure_vector_candidates(
+            candidates,
+            append_offset_path(root, offset),
+            child,
+            state,
+            0x180);
+    }
+}
+
+float lure_candidate_score(const LureVectorCandidate& candidate)
+{
+    if (candidate.dist_to_estimated != std::numeric_limits<float>::max())
+        return candidate.dist_to_estimated;
+    if (candidate.dist_to_fisher != std::numeric_limits<float>::max())
+        return candidate.dist_to_fisher;
+    return candidate.dist_to_rod;
+}
+
+void log_lure_vector_candidates(const char* reason, const ProbeSet& probe, const SensorState& state)
+{
+    std::vector<LureVectorCandidate> candidates;
+    candidates.reserve(128);
+    collect_lure_vector_candidates(
+        candidates,
+        "complex",
+        reinterpret_cast<uintptr_t>(probe.lure_complex),
+        state);
+    collect_lure_child_vector_candidates(
+        candidates,
+        "complex",
+        reinterpret_cast<uintptr_t>(probe.lure_complex),
+        state);
+    collect_lure_vector_candidates(candidates, "simple", state.lure_simple, state);
+    collect_lure_child_vector_candidates(candidates, "simple", state.lure_simple, state);
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        return lure_candidate_score(left) < lure_candidate_score(right);
+    });
+
+    std::ostringstream out;
+    out << "lure_vector_candidates[" << reason << "]: count=" << candidates.size();
+    const size_t limit = std::min<size_t>(candidates.size(), 8);
+    for (size_t i = 0; i < limit; ++i) {
+        const auto& candidate = candidates[i];
+        out << " " << candidate.path
+            << "+0x" << std::uppercase << std::hex << candidate.offset << std::dec
+            << "=" << format_vec(candidate.value)
+            << " dEst=" << std::fixed << std::setprecision(2) << candidate.dist_to_estimated
+            << " dF=" << candidate.dist_to_fisher
+            << " dR=" << candidate.dist_to_rod;
+    }
+    log_line(out.str());
+}
+
+void collect_fish_vector_candidates(
+    std::vector<FishVectorCandidate>& candidates,
+    const std::string& path,
+    uintptr_t base,
+    const SensorState& state,
+    uintptr_t max_offset = 0x240)
+{
+    if (!base)
+        return;
+
+    for (uintptr_t offset = 0x10; offset <= max_offset; offset += sizeof(float)) {
+        const auto value = read_absolute_value<Vector3>(base + offset);
+        if (!value || !valid_vector(*value) || near_zero_vector(*value))
+            continue;
+
+        candidates.push_back(FishVectorCandidate{
+            path,
+            offset,
+            *value,
+            reference_distance(*value, state.best_lure_pos),
+            reference_distance(*value, state.fisher_pos),
+        });
+    }
+}
+
+void collect_fish_child_vector_candidates(
+    std::vector<FishVectorCandidate>& candidates,
+    const std::string& root,
+    uintptr_t base,
+    const SensorState& state)
+{
+    if (!base)
+        return;
+
+    for (uintptr_t offset = 0x10; offset <= 0x240; offset += sizeof(uintptr_t)) {
+        const uintptr_t child = read_absolute_value<uintptr_t>(base + offset).value_or(0);
+        if (!likely_pointer(child))
+            continue;
+
+        collect_fish_vector_candidates(
+            candidates,
+            append_offset_path(root, offset),
+            child,
+            state,
+            0x180);
+    }
+}
+
+float fish_candidate_score(const FishVectorCandidate& candidate)
+{
+    if (candidate.dist_to_lure != std::numeric_limits<float>::max())
+        return candidate.dist_to_lure;
+    return candidate.dist_to_fisher;
+}
+
+void log_fish_vector_candidates(const char* reason, const SensorState& state)
+{
+    std::vector<FishVectorRoot> roots;
+    std::unordered_set<uintptr_t> seen;
+    auto add_root = [&](const std::string& path, uintptr_t object) {
+        if (!likely_pointer(object) || seen.find(object) != seen.end())
+            return;
+        seen.insert(object);
+        roots.push_back(FishVectorRoot{path, object});
+    };
+
+    for (size_t i = 0; i < g_fish_instances.size() && i < 4; ++i) {
+        add_root("tracked[" + std::to_string(i) + "]",
+                 reinterpret_cast<uintptr_t>(g_fish_instances[i]));
+    }
+    add_root("logical_lure", state.logical_fish_lure);
+    add_root("logical_set", state.logical_fish_set);
+    add_root("logical_guid", state.logical_fish_guid);
+    add_root("logical_rig", state.logical_fish_rig);
+    add_root("closest", state.closest_fish);
+
+    std::vector<FishVectorCandidate> candidates;
+    candidates.reserve(256);
+    for (const auto& root : roots) {
+        collect_fish_vector_candidates(candidates, root.path, root.object, state);
+        collect_fish_child_vector_candidates(candidates, root.path, root.object, state);
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        return fish_candidate_score(left) < fish_candidate_score(right);
+    });
+
+    std::ostringstream out;
+    out << "fish_vector_candidates[" << reason << "]: roots=" << roots.size()
+        << " count=" << candidates.size();
+    const size_t limit = std::min<size_t>(candidates.size(), 8);
+    for (size_t i = 0; i < limit; ++i) {
+        const auto& candidate = candidates[i];
+        out << " " << candidate.path
+            << "+0x" << std::uppercase << std::hex << candidate.offset << std::dec
+            << "=" << format_vec(candidate.value)
+            << " dL=" << std::fixed << std::setprecision(2) << candidate.dist_to_lure
+            << " dF=" << candidate.dist_to_fisher;
+    }
+    log_line(out.str());
+}
+
+void log_snapshot_quality(const char* reason, const ProbeSet& probe, const SensorState& state)
+{
+    std::ostringstream out;
+    out << "snapshot_quality[" << reason << "]:"
+        << " quality=" << coordinate_quality(state)
+        << " roots=fs:" << (state.has_fishing_set ? 1 : 0)
+        << "/fisher:" << (state.has_fisher ? 1 : 0)
+        << "/rod:" << (state.has_rod ? 1 : 0)
+        << "/reel:" << (state.has_reel ? 1 : 0)
+        << "/lure:" << (state.has_lure ? 1 : 0)
+        << " lure_complex=" << hex_ptr(probe.lure_complex)
+        << " lure_simple=" << hex_u64(state.lure_simple)
+        << " lure_source=" << lure_position_source(state)
+        << " raw_lure=" << format_vec(state.lure_pos)
+        << " est_lure=" << format_vec(state.lure_estimated_pos)
+        << " best_lure=" << format_vec(state.best_lure_pos)
+        << " fish_count=" << state.fish_count
+        << " fish_source=" << closest_fish_source_name(state.closest_fish_source)
+        << " fish_pos_source=" << fish_position_source_name(state.closest_fish_position_source)
+        << " logical_lure=" << hex_u64(state.logical_fish_lure)
+        << " logical_set=" << hex_u64(state.logical_fish_set)
+        << " logical_guid=" << hex_u64(state.logical_fish_guid)
+        << " logical_rig=" << hex_u64(state.logical_fish_rig)
+        << " closest_fish=" << hex_u64(state.closest_fish)
+        << " fish_pos=" << format_vec(state.closest_fish_pos)
+        << " dist_fisher_lure=" << std::fixed << std::setprecision(2) << state.fisher_to_lure
+        << " dist_rod_lure=" << std::fixed << std::setprecision(2) << state.rod_tip_to_lure;
+    log_line(out.str());
+    log_lure_vector_candidates(reason, probe, state);
+    log_fish_vector_candidates(reason, state);
+}
+
 std::string sensor_summary(const SensorState& state)
 {
     std::ostringstream out;
@@ -1806,8 +2335,17 @@ std::string sensor_summary(const SensorState& state)
         << " FS160=" << hex_u64(state.fishing_set_160)
         << " rodLoad=" << std::fixed << std::setprecision(3) << state.rod_load
         << " reel=" << std::fixed << std::setprecision(3) << state.reel_value
+        << " interactiveRod=" << hex_u64(state.interactive_rod)
+        << " rig=" << hex_u64(state.rig_connector_field)
+        << " flags[60=" << state.fishing_set_flag_0x60
+        << ",61=" << state.fishing_set_flag_0x61
+        << ",88=" << state.fishing_set_flag_0x88
+        << ",89=" << state.fishing_set_flag_0x89
+        << ",8A=" << state.fishing_set_flag_0x8A << "]"
         << " lure=" << format_vec(state.best_lure_pos)
         << (state.best_lure_estimated ? "(est)" : "")
+        << " lureSrc=" << lure_position_source(state)
+        << " q=" << coordinate_quality(state)
         << " rodWorld=" << format_vec(state.rod_mid)
         << " dist(F/L)=" << std::fixed << std::setprecision(1) << state.fisher_to_lure
         << " dist(R/L)=" << std::fixed << std::setprecision(1) << state.rod_tip_to_lure;
@@ -1820,15 +2358,18 @@ std::string sensor_summary(const SensorState& state)
         out << " setup=" << hex_u64(state.fishing_setup)
             << " biteMeta=" << hex_u64(state.fish_bite_meta);
     }
-    if (state.logical_fish_lure || state.logical_fish_set || state.logical_fish_guid) {
+    if (state.logical_fish_lure || state.logical_fish_set ||
+        state.logical_fish_guid || state.logical_fish_rig) {
         out << " logicalFish="
             << hex_u64(state.logical_fish_lure ? state.logical_fish_lure :
                        state.logical_fish_set ? state.logical_fish_set :
-                       state.logical_fish_guid);
+                       state.logical_fish_guid ? state.logical_fish_guid :
+                       state.logical_fish_rig);
     }
     if (state.has_closest_fish) {
         out << " fishPos=" << format_vec(state.closest_fish_pos)
             << " fishSrc=" << state.closest_fish_source
+            << " fishPosSrc=" << fish_position_source_name(state.closest_fish_position_source)
             << " fishL=" << std::fixed << std::setprecision(1) << state.closest_fish_to_lure
             << " fishF=" << std::fixed << std::setprecision(1) << state.closest_fish_to_fisher;
     }
@@ -2178,7 +2719,11 @@ void write_coordinate_header(std::ofstream& out)
            "closest_fish,closest_fish_source,fish_x,fish_y,fish_z,"
            "fish_alt_x,fish_alt_y,fish_alt_z,fish_to_lure,fish_to_fisher,"
            "fishing_set_0x150,fishing_set_0x158,fishing_set_0x160,"
-           "rod_load,reel_value,reel_flags\n";
+           "rod_load,reel_value,reel_flags,"
+           "coordinate_quality,lure_position_source,fish_position_source,"
+           "has_fishing_set,has_fisher,has_rod,has_reel,has_lure,"
+           "has_lure_simple,has_best_lure_pos,has_closest_fish,"
+           "logical_fish_rig\n";
 }
 
 bool log_coordinate_snapshot(const char* reason, const SensorState& state)
@@ -2233,6 +2778,18 @@ bool log_coordinate_snapshot(const char* reason, const SensorState& state)
         << ',' << state.rod_load
         << ',' << state.reel_value
         << ',' << state.reel_state_flags
+        << ',' << coordinate_quality(state)
+        << ',' << lure_position_source(state)
+        << ',' << fish_position_source_name(state.closest_fish_position_source)
+        << ',' << (state.has_fishing_set ? 1 : 0)
+        << ',' << (state.has_fisher ? 1 : 0)
+        << ',' << (state.has_rod ? 1 : 0)
+        << ',' << (state.has_reel ? 1 : 0)
+        << ',' << (state.has_lure ? 1 : 0)
+        << ',' << (state.has_lure_simple ? 1 : 0)
+        << ',' << (state.has_best_lure_pos ? 1 : 0)
+        << ',' << (state.has_closest_fish ? 1 : 0)
+        << ',' << hex_u64(state.logical_fish_rig)
         << '\n';
 
     return true;
@@ -2298,8 +2855,10 @@ bool log_diagnostic_snapshot(const char* reason)
     out << '\n';
 
     const bool coordinate_ok = log_coordinate_snapshot(reason, sensor);
-    if (std::string(reason) != "periodic")
+    if (std::string(reason) != "periodic") {
+        log_snapshot_quality(reason, probe, sensor);
         log_active_fish_object_map(reason, probe);
+    }
 
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -2491,10 +3050,87 @@ bool hold_input_action(void* action, DWORD hold_ms)
 
 bool send_key_state(WORD vk, bool pressed)
 {
+    if (is_process_window_foreground()) {
+        INPUT input{};
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = vk;
+        input.ki.dwFlags = pressed ? 0 : KEYEVENTF_KEYUP;
+        return SendInput(1, &input, sizeof(INPUT)) == 1;
+    }
+
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    LPARAM lparam = 1 | (static_cast<LPARAM>(scan) << 16);
+    if (!pressed)
+        lparam |= (1LL << 30) | (1LL << 31);
+
+    if (vk == VK_SHIFT) {
+        if (pressed)
+            g_posted_key_modifiers |= MK_SHIFT;
+        else
+            g_posted_key_modifiers &= ~MK_SHIFT;
+    } else if (vk == VK_CONTROL) {
+        if (pressed)
+            g_posted_key_modifiers |= MK_CONTROL;
+        else
+            g_posted_key_modifiers &= ~MK_CONTROL;
+    }
+
+    return PostMessageW(hwnd, pressed ? WM_KEYDOWN : WM_KEYUP, vk, lparam) != FALSE;
+}
+
+struct ProcessWindowSearch {
+    DWORD pid = 0;
+    HWND hwnd = nullptr;
+};
+
+BOOL CALLBACK enum_process_windows(HWND hwnd, LPARAM lparam)
+{
+    auto* search = reinterpret_cast<ProcessWindowSearch*>(lparam);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != search->pid || !IsWindowVisible(hwnd))
+        return TRUE;
+
+    search->hwnd = hwnd;
+    return FALSE;
+}
+
+HWND find_process_window()
+{
+    ProcessWindowSearch search{};
+    search.pid = GetCurrentProcessId();
+    EnumWindows(enum_process_windows, reinterpret_cast<LPARAM>(&search));
+    return search.hwnd;
+}
+
+bool is_process_window_foreground()
+{
+    const HWND foreground = GetForegroundWindow();
+    if (!foreground)
+        return false;
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(foreground, &pid);
+    return pid == GetCurrentProcessId();
+}
+
+bool send_scan_key_state(WORD vk, bool pressed)
+{
+    if (!is_process_window_foreground())
+        return send_key_state(vk, pressed);
+
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    if (!scan)
+        return send_key_state(vk, pressed);
+
     INPUT input{};
     input.type = INPUT_KEYBOARD;
-    input.ki.wVk = vk;
-    input.ki.dwFlags = pressed ? 0 : KEYEVENTF_KEYUP;
+    input.ki.wScan = static_cast<WORD>(scan);
+    input.ki.dwFlags = KEYEVENTF_SCANCODE | (pressed ? 0 : KEYEVENTF_KEYUP);
     return SendInput(1, &input, sizeof(INPUT)) == 1;
 }
 
@@ -2505,6 +3141,15 @@ bool tap_key(WORD vk, DWORD hold_ms = 55)
 
     sleep_interruptible(hold_ms);
     return send_key_state(vk, false);
+}
+
+bool tap_scan_key(WORD vk, DWORD hold_ms = 55)
+{
+    if (!send_scan_key_state(vk, true))
+        return false;
+
+    sleep_interruptible(hold_ms);
+    return send_scan_key_state(vk, false);
 }
 
 bool tap_key_combo(WORD modifier, WORD key, DWORD hold_ms = 55)
@@ -2519,10 +3164,115 @@ bool tap_key_combo(WORD modifier, WORD key, DWORD hold_ms = 55)
 
 bool send_mouse_event(DWORD flags)
 {
-    INPUT input{};
-    input.type = INPUT_MOUSE;
-    input.mi.dwFlags = flags;
-    return SendInput(1, &input, sizeof(INPUT)) == 1;
+    if (is_process_window_foreground()) {
+        INPUT input{};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = flags;
+        return SendInput(1, &input, sizeof(INPUT)) == 1;
+    }
+
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    RECT rect{};
+    if (!GetClientRect(hwnd, &rect))
+        return false;
+
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0)
+        return false;
+
+    const LPARAM point = MAKELPARAM(width / 2, height / 2);
+    UINT message = 0;
+    if (flags & MOUSEEVENTF_LEFTDOWN) {
+        g_posted_mouse_buttons |= MK_LBUTTON;
+        message = WM_LBUTTONDOWN;
+    } else if (flags & MOUSEEVENTF_LEFTUP) {
+        g_posted_mouse_buttons &= ~MK_LBUTTON;
+        message = WM_LBUTTONUP;
+    } else if (flags & MOUSEEVENTF_RIGHTDOWN) {
+        g_posted_mouse_buttons |= MK_RBUTTON;
+        message = WM_RBUTTONDOWN;
+    } else if (flags & MOUSEEVENTF_RIGHTUP) {
+        g_posted_mouse_buttons &= ~MK_RBUTTON;
+        message = WM_RBUTTONUP;
+    } else {
+        return false;
+    }
+
+    const WPARAM state = g_posted_mouse_buttons | g_posted_key_modifiers;
+    PostMessageW(hwnd, WM_MOUSEMOVE, state, point);
+    return PostMessageW(hwnd, message, state, point) != FALSE;
+}
+
+bool click_window_fraction(double x_fraction, double y_fraction)
+{
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    RECT rect{};
+    if (!GetClientRect(hwnd, &rect))
+        return false;
+
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0)
+        return false;
+
+    const int x = static_cast<int>(std::lround(width * x_fraction));
+    const int y = static_cast<int>(std::lround(height * y_fraction));
+    const LPARAM point = MAKELPARAM(x, y);
+    PostMessageW(hwnd, WM_MOUSEMOVE, 0, point);
+    sleep_interruptible(40);
+    const bool down = PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, point) != FALSE;
+    sleep_interruptible(80);
+    const bool up = PostMessageW(hwnd, WM_LBUTTONUP, 0, point) != FALSE;
+    return down && up;
+}
+
+bool post_window_key(WORD vk)
+{
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    const LPARAM down_lparam = 1 | (static_cast<LPARAM>(scan) << 16);
+    const LPARAM up_lparam =
+        1 | (static_cast<LPARAM>(scan) << 16) | (1LL << 30) | (1LL << 31);
+    const bool down = PostMessageW(hwnd, WM_KEYDOWN, vk, down_lparam) != FALSE;
+    sleep_interruptible(95);
+    const bool up = PostMessageW(hwnd, WM_KEYUP, vk, up_lparam) != FALSE;
+    return down && up;
+}
+
+bool post_window_click_fraction(double x_fraction, double y_fraction)
+{
+    const HWND hwnd = find_process_window();
+    if (!hwnd)
+        return false;
+
+    RECT rect{};
+    if (!GetClientRect(hwnd, &rect))
+        return false;
+
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0)
+        return false;
+
+    const int x = static_cast<int>(std::lround(width * x_fraction));
+    const int y = static_cast<int>(std::lround(height * y_fraction));
+    const LPARAM point = MAKELPARAM(x, y);
+    PostMessageW(hwnd, WM_MOUSEMOVE, 0, point);
+    sleep_interruptible(40);
+    const bool down = PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, point) != FALSE;
+    sleep_interruptible(80);
+    const bool up = PostMessageW(hwnd, WM_LBUTTONUP, 0, point) != FALSE;
+    return down && up;
 }
 
 bool send_left_mouse_hold(DWORD hold_ms, bool shift_boost = false)
@@ -2591,7 +3341,20 @@ bool has_detected_fish(const SensorState& state)
     return state.has_closest_fish ||
         state.logical_fish_lure != 0 ||
         state.logical_fish_set != 0 ||
-        state.logical_fish_guid != 0;
+        state.logical_fish_guid != 0 ||
+        state.logical_fish_rig != 0;
+}
+
+bool is_likely_catch_result_screen(const SensorState& state)
+{
+    const bool has_fish_signal = state.fish_count > 0 || has_detected_fish(state);
+    const bool tackle_home =
+        state.has_best_lure_pos &&
+        state.rod_tip_to_lure >= 0.0f &&
+        state.rod_tip_to_lure <= 0.75f &&
+        state.fisher_to_lure >= 0.5f &&
+        state.fisher_to_lure <= 4.0f;
+    return has_fish_signal && tackle_home && state.fishing_set_160 == 0x800;
 }
 
 using SpawnActiveFishFn = uintptr_t (*)(SystemGuid*, void*);
@@ -2800,6 +3563,89 @@ void set_command_result(fc::actions::Command command, bool result)
                : "call returned false");
 }
 
+bool perform_catch_result_choice(
+    fc::actions::Command command,
+    WORD vk,
+    const char* label,
+    double click_x_fraction,
+    double click_y_fraction)
+{
+    const SensorState before = refresh_sensor_status();
+    const bool had_fish =
+        before.fish_count > 0 ||
+        before.has_closest_fish ||
+        before.logical_fish_lure ||
+        before.logical_fish_set ||
+        before.logical_fish_guid ||
+        before.logical_fish_rig;
+
+    fc::Overlay::Get().SetMenuVisible(false);
+    sleep_interruptible(180);
+    const bool targeted = find_process_window() != nullptr;
+    bool ok = tap_scan_key(vk, 95);
+    if (!ok)
+        ok = tap_key(vk, 95);
+    sleep_interruptible(1200);
+
+    scan_fish_instances(true);
+    SensorState after = refresh_sensor_status();
+    auto still_has_result_fish = [](const SensorState& state) {
+        return
+            state.fish_count > 0 ||
+            state.has_closest_fish ||
+            state.logical_fish_lure ||
+            state.logical_fish_set ||
+            state.logical_fish_guid ||
+            state.logical_fish_rig;
+    };
+    bool has_fish_after =
+        after.fish_count > 0 ||
+        after.has_closest_fish ||
+        after.logical_fish_lure ||
+        after.logical_fish_set ||
+        after.logical_fish_guid ||
+        after.logical_fish_rig;
+    bool confirmed = ok && had_fish && !has_fish_after;
+    bool clicked = false;
+    bool posted = false;
+    if (ok && !confirmed) {
+        clicked = click_window_fraction(click_x_fraction, click_y_fraction);
+        sleep_interruptible(1200);
+        scan_fish_instances(true);
+        after = refresh_sensor_status();
+        has_fish_after = still_has_result_fish(after);
+        confirmed = clicked && had_fish && !has_fish_after;
+    }
+    if (ok && !confirmed) {
+        const bool posted_key = post_window_key(vk);
+        sleep_interruptible(250);
+        const bool posted_click = post_window_click_fraction(click_x_fraction, click_y_fraction);
+        posted = posted_key || posted_click;
+        sleep_interruptible(1200);
+        scan_fish_instances(true);
+        after = refresh_sensor_status();
+        has_fish_after = still_has_result_fish(after);
+        confirmed = posted && had_fish && !has_fish_after;
+    }
+
+    log_coordinate_snapshot(command_name(command), after);
+
+    std::ostringstream observation;
+    observation << "sent targeted " << label
+        << "; target_window=" << (targeted ? "true" : "false")
+        << "; clicked=" << (clicked ? "true" : "false")
+        << "; posted=" << (posted ? "true" : "false")
+        << "; fish=" << before.fish_count << "->" << after.fish_count
+        << " logical_lure=" << hex_u64(before.logical_fish_lure)
+        << "->" << hex_u64(after.logical_fish_lure)
+        << " logical_rig=" << hex_u64(before.logical_fish_rig)
+        << "->" << hex_u64(after.logical_fish_rig)
+        << " closest=" << hex_u64(before.closest_fish)
+        << "->" << hex_u64(after.closest_fish);
+    set_command_result_observed(command, ok, confirmed, observation.str());
+    return confirmed;
+}
+
 void set_busy(fc::actions::Command command)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -2850,10 +3696,41 @@ void toggle_auto_reel()
     log_line(enabled ? "auto_reel: enabled" : "auto_reel: disabled");
 }
 
+// Forward declarations: the AutoFish helpers below (set_auto_reel_enabled,
+// auto_fish_phase_name, auto_fish_reset_to_idle) are defined further down in
+// this translation unit, but set_auto_fish_enabled needs them here.
+void set_auto_reel_enabled(bool enabled);
+const char* auto_fish_phase_name(AutoFishPhase phase);
+void auto_fish_reset_to_idle();
+
+void set_auto_fish_enabled(bool enabled)
+{
+    if (g_auto_fish_enabled.load() == enabled)
+        return;
+
+    g_auto_fish_enabled.store(enabled);
+    // The FSM owns the reel while it runs; force the legacy timer off so the
+    // two never fight over ManualRoll.
+    if (enabled) {
+        set_auto_reel_enabled(false);
+        auto_fish_reset_to_idle();
+    }
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_status.auto_fish_enabled = enabled;
+    g_status.auto_fish_state = enabled ? auto_fish_phase_name(g_auto_fish_phase) : "";
+    g_status.message = enabled ? "auto fish enabled" : "auto fish disabled";
+    g_status.auto_reel_enabled = g_auto_reel_enabled;
+    log_line(enabled ? "auto_fish: enabled" : "auto_fish: disabled");
+}
+
+void toggle_auto_fish()
+{
+    set_auto_fish_enabled(!g_auto_fish_enabled.load());
+}
+
 void maybe_auto_reel(const ActionSet& actions)
 {
-    (void)actions;
-
     if (!g_auto_reel_enabled.load())
         return;
 
@@ -2862,6 +3739,25 @@ void maybe_auto_reel(const ActionSet& actions)
         return;
 
     const SensorState before = refresh_sensor_status();
+    if (is_likely_catch_result_screen(before)) {
+        if (g_next_auto_result_choice.time_since_epoch().count() != 0 &&
+            now < g_next_auto_result_choice) {
+            update_auto_reel_status("auto reel waiting after catch result");
+            return;
+        }
+
+        g_next_auto_result_choice = now + std::chrono::seconds(15);
+        std::ostringstream out;
+        out << "auto_reel: catch result detected; accepting keep_fish"
+            << " fish=" << before.fish_count
+            << " dist_rod_lure=" << std::fixed << std::setprecision(2) << before.rod_tip_to_lure
+            << " dist_fisher_lure=" << before.fisher_to_lure
+            << " flags=" << hex_u64(before.fishing_set_160);
+        log_line(out.str());
+        perform_continue_fishing(actions);
+        return;
+    }
+
     const bool active_fishing =
         before.fishing_set_150 != 0 ||
         before.fishing_set_158 != 0 ||
@@ -2878,9 +3774,18 @@ void maybe_auto_reel(const ActionSet& actions)
     if (!fish_fight && (tick % 12) == 0)
         prepare_reel_for_retrieve();
 
-    const bool ok = fish_fight
-        ? send_fish_fight_hold(active_fishing ? 850 : 520)
-        : send_left_mouse_hold(active_fishing ? 700 : 420, true);
+    const DWORD hold_ms = fish_fight ? (active_fishing ? 850 : 520) : (active_fishing ? 700 : 420);
+    void* reel_action = fish_fight || active_fishing ? actions.manual_roll_boost : actions.manual_roll;
+    if (!reel_action)
+        reel_action = actions.manual_roll;
+    const bool action_ok = hold_input_action(reel_action, hold_ms);
+    bool mouse_ok = false;
+    if (is_process_window_foreground()) {
+        mouse_ok = fish_fight
+            ? send_fish_fight_hold(hold_ms)
+            : send_left_mouse_hold(hold_ms, true);
+    }
+    const bool ok = action_ok || mouse_ok;
     const unsigned long long new_tick = ++g_auto_reel_ticks;
 
     if ((new_tick % 20) == 0) {
@@ -2899,6 +3804,7 @@ void maybe_auto_reel(const ActionSet& actions)
 }
 
 bool perform_real_retrieve(
+    const ActionSet& actions,
     fc::actions::Command command,
     DWORD hold_ms,
     bool shift_boost,
@@ -2911,8 +3817,16 @@ bool perform_real_retrieve(
     if (!fish_fight && prepare_reel)
         ok = prepare_reel_for_retrieve() && ok;
 
-    ok = (fish_fight ? send_fish_fight_hold(hold_ms)
-                     : send_left_mouse_hold(hold_ms, shift_boost)) && ok;
+    void* reel_action = fish_fight || shift_boost ? actions.manual_roll_boost : actions.manual_roll;
+    if (!reel_action)
+        reel_action = actions.manual_roll;
+    bool input_action_hold = hold_input_action(reel_action, hold_ms);
+    bool mouse_hold = false;
+    if (is_process_window_foreground()) {
+        mouse_hold = fish_fight ? send_fish_fight_hold(hold_ms)
+                                : send_left_mouse_hold(hold_ms, shift_boost);
+    }
+    ok = (input_action_hold || mouse_hold) && ok;
 
     sleep_interruptible(650);
     const SensorState after = refresh_sensor_status();
@@ -2927,8 +3841,9 @@ bool perform_real_retrieve(
          (fish_fight && reel_changed));
 
     std::ostringstream observation;
-    observation << "real "
-        << (fish_fight ? "RMB+LMB fish-fight hold " : (shift_boost ? "Shift+LMB hold " : "LMB hold "))
+    observation << "targeted "
+        << (input_action_hold ? "InputAction " : (mouse_hold ? "foreground game mouse " : "no foreground mouse "))
+        << (fish_fight ? "fish-fight hold " : (shift_boost ? "boost roll hold " : "roll hold "))
         << hold_ms << "ms"
         << "; reel_delta=" << std::fixed << std::setprecision(3) << reel_delta
         << " distance_delta=" << distance_delta
@@ -3010,6 +3925,7 @@ bool perform_auto_cast(const ActionSet& actions)
     if (std::fabs(before.reel_value) > 0.5f || before.fisher_to_lure > 2.0f) {
         set_busy(fc::actions::Command::ManualRollBoost);
         perform_real_retrieve(
+            actions,
             fc::actions::Command::ManualRollBoost,
             8500,
             true,
@@ -3036,13 +3952,15 @@ bool perform_auto_cast(const ActionSet& actions)
 
     set_busy(fc::actions::Command::StartHooking);
     sleep_interruptible(250);
-    const bool cast_hold = send_left_mouse_hold(1600);
+    const bool game_foreground = is_process_window_foreground();
+    const bool cast_hold = game_foreground && send_left_mouse_hold(1600);
     set_command_result_observed(
         fc::actions::Command::StartHooking,
         cast_hold,
         false,
-        cast_hold ? "sent real left mouse hold for 1600ms; waiting for lure movement"
-                  : "real left mouse hold failed");
+        cast_hold ? "sent foreground-guarded game mouse hold for 1600ms; waiting for lure movement"
+                  : (game_foreground ? "foreground-guarded game mouse hold failed"
+                                     : "game is not foreground; skipped system mouse hold"));
     ok = ok && cast_hold;
 
     sleep_interruptible(1800);
@@ -3090,12 +4008,35 @@ void set_diagnostics_enabled(bool enabled)
     log_line(enabled ? "fishing diagnostics enabled" : "fishing diagnostics disabled");
 }
 
-void perform_auto_catch(const ActionSet& actions)
+bool perform_auto_catch(const ActionSet& actions)
 {
     bool ok = perform_auto_cast(actions);
     set_auto_reel_enabled(true);
     ok = log_diagnostic_snapshot("auto_catch") && ok;
     set_command_result(fc::actions::Command::AutoCatch, ok);
+    return ok;
+}
+
+void perform_continue_fishing(const ActionSet& actions)
+{
+    set_busy(fc::actions::Command::ContinueFishing);
+    const bool accepted = perform_catch_result_choice(
+        fc::actions::Command::ContinueFishing,
+        VK_SPACE,
+        "Space keep_fish",
+        0.449,
+        0.848);
+    if (!accepted)
+        return;
+
+    sleep_interruptible(900);
+    const bool restarted = perform_auto_catch(actions);
+    set_command_result_observed(
+        fc::actions::Command::ContinueFishing,
+        restarted,
+        restarted,
+        restarted ? "catch result accepted; auto_catch restarted"
+                  : "catch result accepted; auto_catch restart failed");
 }
 
 bool mark_current_spot(const char* reason)
@@ -3144,7 +4085,7 @@ bool perform_fish_scan()
 {
     scan_fish_instances(true);
     const SensorState state = refresh_sensor_status();
-    const bool ok = log_coordinate_snapshot("scan_fish", state);
+    const bool ok = log_diagnostic_snapshot("scan_fish");
 
     std::lock_guard<std::mutex> lock(g_mutex);
     g_status.message = std::string("fish scanned: ") +
@@ -3171,6 +4112,7 @@ bool perform_verified_fish_debug_command(fc::actions::Command command, const Act
 
 void perform_stop_all(const ActionSet& actions)
 {
+    set_auto_fish_enabled(false);
     set_auto_reel_enabled(false);
     set_diagnostics_enabled(false);
 
@@ -3179,6 +4121,295 @@ void perform_stop_all(const ActionSet& actions)
         ok = game_actions::pulse_input_action(actions.return_to_idle);
 
     set_command_result(fc::actions::Command::StopAll, ok);
+}
+
+const char* auto_fish_phase_name(AutoFishPhase phase)
+{
+    switch (phase) {
+    case AutoFishPhase::Idle:       return "idle";
+    case AutoFishPhase::Cast:       return "cast";
+    case AutoFishPhase::WaitBite:   return "wait_bite";
+    case AutoFishPhase::Hooked:     return "hooked";
+    case AutoFishPhase::Fight:      return "fight";
+    case AutoFishPhase::CatchResult:return "catch_result";
+    }
+    return "unknown";
+}
+
+void auto_fish_enter_phase(AutoFishPhase phase)
+{
+    g_auto_fish_phase = phase;
+    g_auto_fish_phase_since = std::chrono::steady_clock::now();
+    g_auto_fish_bite_armed = false;
+
+    std::ostringstream out;
+    out << "auto_fish: -> " << auto_fish_phase_name(phase);
+    log_line(out.str());
+    remember_event(out.str());
+}
+
+// Pure cast sequence for the FSM: SwitchThrowMode -> ChangeThrowDistance ->
+// Hitch -> hold StartHooking. Every step drives the Unity InputSystem only
+// (no mouse/keyboard), so it works with the game window minimized or in the
+// background. Returns true if the lure is observed to move after the cast.
+bool auto_fish_pure_cast(const ActionSet& actions)
+{
+    const SensorState cast_before = refresh_sensor_status();
+
+    // If the line is already out (lure far / reel tension), reel it in first so
+    // we start a fresh cast. Pure InputSystem reel.
+    if (std::fabs(cast_before.reel_value) > 0.5f || cast_before.fisher_to_lure > 2.0f) {
+        hold_input_action(actions.manual_roll_boost ? actions.manual_roll_boost
+                                                    : actions.manual_roll,
+                          8500);
+        sleep_interruptible(800);
+    }
+
+    const fc::actions::Command sequence[] = {
+        fc::actions::Command::SwitchThrowMode,
+        fc::actions::Command::ChangeThrowDistance,
+        fc::actions::Command::Hitch,
+    };
+    bool ok = true;
+    for (fc::actions::Command command : sequence) {
+        ok = perform_command(command, actions) && ok;
+        sleep_interruptible(90);
+    }
+
+    // The actual cast in RF4 is a hold of the hooking action; drive it via the
+    // InputSystem, not a mouse button.
+    if (actions.start_hooking) {
+        hold_input_action(actions.start_hooking, 1600);
+        ok = ok && true;
+    } else {
+        ok = false;
+    }
+
+    sleep_interruptible(1800);
+    const SensorState after = refresh_sensor_status();
+    const float lure_delta = distance_between(cast_before.best_lure_pos, after.best_lure_pos);
+
+    // Success criteria, in order of reliability. We cannot rely on lure_delta
+    // because LureComplex is only instantiated after the cast fully lands and is
+    // absent in this RF4 build until then. Instead, treat the cast as good if
+    // the InputAction was driven AND the rod now shows any load/tension or the
+    // reel is engaged - i.e. the line is out and in the water.
+    const bool line_out =
+        after.rod_load > 0.02f ||
+        std::fabs(after.reel_value) > 0.2f ||
+        (cast_before.has_best_lure_pos && after.has_best_lure_pos && lure_delta > 1.0f);
+    const bool observed = ok && line_out;
+
+    std::ostringstream out;
+    out << "auto_fish: cast lure_delta=" << std::fixed << std::setprecision(2) << lure_delta
+        << " rod_load=" << std::setprecision(3) << after.rod_load
+        << " reel=" << after.reel_value
+        << " fish=" << after.fish_count << " ok=" << (ok ? 1 : 0)
+        << " line_out=" << (line_out ? 1 : 0);
+    log_line(out.str());
+    return observed;
+}
+
+// Pure catch-result accept for the FSM. RF4's catch-result screen uses the same
+// InputSystem actions as everything else; we pulse the keep action rather than
+// faking Space/clicks. Falls back to a short roll so a missed accept still
+// advances the FSM instead of stalling forever.
+bool auto_fish_pure_accept(const ActionSet& actions)
+{
+    // No dedicated "keep fish" InputAction is mapped in the generated offsets,
+    // but the catch result is dismissed by returning to idle / confirming.
+    // Drive it via the known ReturnToIdle action; if that is unavailable, reel
+    // briefly so the line is recovered and we can re-cast.
+    bool ok = false;
+    if (actions.return_to_idle) {
+        ok = game_actions::pulse_input_action(actions.return_to_idle);
+        sleep_interruptible(500);
+    }
+    if (!ok && (actions.manual_roll_boost ? actions.manual_roll_boost : actions.manual_roll)) {
+        ok = hold_input_action(actions.manual_roll_boost ? actions.manual_roll_boost
+                                                         : actions.manual_roll,
+                               1500);
+    }
+    return ok;
+}
+
+// Thresholding for bite detection. We compare against a baseline captured at
+// the start of WaitBite so drift in the resting rod load does not desensitize
+// the detector.
+bool auto_fish_load_exceeds(const SensorState& state, float extra)
+{
+    return state.rod_load > (g_auto_fish_baseline_load + extra);
+}
+
+// One non-blocking tick of the reel at maximum speed via the Unity InputSystem
+// only (no mouse/keyboard). This keeps working when the game window is
+// minimized/backgrounded, because it just drives the InputAction state machine
+// in memory the same way a pressed mouse button would.
+bool auto_fish_reel_tick(const ActionSet& actions, DWORD hold_ms)
+{
+    void* reel_action = actions.manual_roll_boost;
+    if (!reel_action)
+        reel_action = actions.manual_roll;
+    return hold_input_action(reel_action, hold_ms);
+}
+
+void auto_fish_reset_to_idle()
+{
+    auto_fish_enter_phase(AutoFishPhase::Idle);
+}
+
+void perform_auto_fish_tick(const ActionSet& actions)
+{
+    if (!g_auto_fish_enabled.load())
+        return;
+
+    const SensorState state = refresh_sensor_status();
+
+    // Keep Status live regardless of phase.
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_status.auto_fish_enabled = true;
+        g_status.auto_fish_state = auto_fish_phase_name(g_auto_fish_phase);
+        g_status.auto_fish_rod_load = state.rod_load;
+        g_status.auto_fish_reel_value = state.reel_value;
+        g_status.auto_fish_rod_in_hand = state.interactive_rod != 0;
+        g_status.auto_fish_cycles = g_auto_fish_cycles.load();
+    }
+
+    fc::actions::AutoFishParams params;
+    {
+        std::lock_guard<std::mutex> lock(g_auto_fish_params_mutex);
+        params = g_auto_fish_params;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto phase_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - g_auto_fish_phase_since).count();
+
+    switch (g_auto_fish_phase) {
+    case AutoFishPhase::Idle: {
+        // Begin a fresh cast cycle. Drop diagnostics noise; we already log per
+        // phase transitions.
+        auto_fish_enter_phase(AutoFishPhase::Cast);
+        break;
+    }
+
+    case AutoFishPhase::Cast: {
+        // Do not attempt a cast until the player actually holds an assembled
+        // rod. FishingSet+0x100 (InteractiveRod) is 0 while the rod is on the
+        // rest/inventory, and in that state the StartHooking InputAction does
+        // nothing - which is exactly the "it didn't even cast" failure. Wait
+        // here instead of hammering a no-op cast.
+        if (state.interactive_rod == 0) {
+            if (phase_ms < 50 || (phase_ms % 2000) < 50) {
+                std::ostringstream out;
+                out << "auto_fish: waiting for InteractiveRod in hand (FS+0x100=0) "
+                    << "setup=" << hex_u64(state.fishing_setup)
+                    << " rig=" << hex_u64(state.rig_connector_field);
+                log_line(out.str());
+            }
+            break;
+        }
+
+        // Pure InputSystem cast sequence; no mouse/keyboard, works minimized.
+        const bool ok = auto_fish_pure_cast(actions);
+        if (!ok) {
+            std::ostringstream out;
+            out << "auto_fish: cast failed, cooldown " << params.cycle_cooldown_ms << "ms";
+            log_line(out.str());
+            sleep_interruptible(static_cast<DWORD>(params.cycle_cooldown_ms));
+            auto_fish_reset_to_idle();
+            break;
+        }
+        // Capture the resting rod load as the bite-detection baseline, then
+        // arm the bite watcher.
+        const SensorState post = refresh_sensor_status();
+        g_auto_fish_baseline_load = post.rod_load;
+        sleep_interruptible(static_cast<DWORD>(params.post_cast_wait_ms));
+        auto_fish_enter_phase(AutoFishPhase::WaitBite);
+        break;
+    }
+
+    case AutoFishPhase::WaitBite: {
+        // Bite = rod load above threshold for bite_confirm_ms (debounced).
+        if (auto_fish_load_exceeds(state, params.bite_load_threshold)) {
+            if (!g_auto_fish_bite_armed) {
+                g_auto_fish_bite_armed = true;
+                g_auto_fish_bite_since = now;
+            } else {
+                const auto armed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - g_auto_fish_bite_since).count();
+                if (armed_ms >= params.bite_confirm_ms) {
+                    std::ostringstream out;
+                    out << "auto_fish: BITE detected load=" << std::fixed
+                        << std::setprecision(3) << state.rod_load
+                        << " baseline=" << g_auto_fish_baseline_load;
+                    log_line(out.str());
+                    remember_event(out.str());
+                    auto_fish_enter_phase(AutoFishPhase::Hooked);
+                }
+            }
+        } else {
+            g_auto_fish_bite_armed = false;
+        }
+
+        // Bail out and re-cast if nothing bites within the timeout.
+        if (phase_ms / 1000 >= params.bite_timeout_s) {
+            log_line("auto_fish: bite timeout, re-casting");
+            auto_fish_reset_to_idle();
+        }
+        break;
+    }
+
+    case AutoFishPhase::Hooked: {
+        // Strike: drive the hook-set purely through the Unity InputSystem
+        // (StartHooking action held, then released). No mouse/keyboard, so it
+        // works when the window is in the background.
+        if (actions.start_hooking)
+            hold_input_action(actions.start_hooking, static_cast<DWORD>(params.hook_hold_ms));
+        sleep_interruptible(300);
+        auto_fish_enter_phase(AutoFishPhase::Fight);
+        break;
+    }
+
+    case AutoFishPhase::Fight: {
+        // Reel at maximum speed, but watch the rod load: when it crosses the
+        // danger threshold we ease off (stop reeling briefly) so the line
+        // tension does not snap the tackle. This is the manual-load control
+        // the user asked for.
+        const bool overloaded = state.rod_load >= params.fight_load_danger;
+        if (overloaded) {
+            std::ostringstream out;
+            out << "auto_fish: FIGHT overload load=" << std::fixed
+                << std::setprecision(3) << state.rod_load << " easing off";
+            log_line(out.str());
+            sleep_interruptible(450);
+            break;
+        }
+
+        auto_fish_reel_tick(actions, 900);
+
+        // The catch-result screen is the terminal condition of the fight. When
+        // the tackle is home and a fish signal is present, hand off to the
+        // catch-result phase which accepts the fish and restarts the loop.
+        if (is_likely_catch_result_screen(state)) {
+            log_line("auto_fish: catch result screen detected");
+            auto_fish_enter_phase(AutoFishPhase::CatchResult);
+        }
+        break;
+    }
+
+    case AutoFishPhase::CatchResult: {
+        // Accept the catch result via the InputSystem only (no key/click),
+        // count a completed cycle, and return to Idle so the FSM owns the
+        // next cast.
+        auto_fish_pure_accept(actions);
+        ++g_auto_fish_cycles;
+        sleep_interruptible(static_cast<DWORD>(params.cycle_cooldown_ms));
+        auto_fish_reset_to_idle();
+        break;
+    }
+    }
 }
 
 DWORD WINAPI worker_thread(void*)
@@ -3204,6 +4435,7 @@ DWORD WINAPI worker_thread(void*)
         process_command_file();
         refresh_sensor_status();
         maybe_auto_reel(g_actions);
+        perform_auto_fish_tick(g_actions);
         maybe_log_periodic_diagnostics();
 
         fc::actions::Command command{};
@@ -3240,6 +4472,13 @@ DWORD WINAPI worker_thread(void*)
             continue;
         }
 
+        if (command == fc::actions::Command::ToggleAutoFish) {
+            set_busy(command);
+            toggle_auto_fish();
+            set_command_result(command, true);
+            continue;
+        }
+
         if (command == fc::actions::Command::AutoCast) {
             perform_auto_cast(g_actions);
             continue;
@@ -3252,6 +4491,23 @@ DWORD WINAPI worker_thread(void*)
 
         if (command == fc::actions::Command::AutoScout) {
             perform_auto_scout(g_actions);
+            continue;
+        }
+
+        if (command == fc::actions::Command::KeepFish) {
+            set_busy(command);
+            perform_catch_result_choice(command, VK_SPACE, "Space keep_fish", 0.449, 0.848);
+            continue;
+        }
+
+        if (command == fc::actions::Command::ReleaseFish) {
+            set_busy(command);
+            perform_catch_result_choice(command, VK_BACK, "Backspace release_fish", 0.551, 0.848);
+            continue;
+        }
+
+        if (command == fc::actions::Command::ContinueFishing) {
+            perform_continue_fishing(g_actions);
             continue;
         }
 
@@ -3287,7 +4543,7 @@ DWORD WINAPI worker_thread(void*)
 
         if (command == fc::actions::Command::ManualRoll) {
             set_busy(command);
-            perform_real_retrieve(command, 3200, false, false, false);
+            perform_real_retrieve(g_actions, command, 3200, false, false, false);
             continue;
         }
 
@@ -3295,6 +4551,7 @@ DWORD WINAPI worker_thread(void*)
             set_busy(command);
             const SensorState state = refresh_sensor_status();
             perform_real_retrieve(
+                g_actions,
                 command,
                 6500,
                 true,
@@ -3326,6 +4583,8 @@ DWORD WINAPI worker_thread(void*)
         g_status.diagnostic_snapshots = g_diagnostic_snapshots;
         g_status.auto_reel_enabled = g_auto_reel_enabled;
         g_status.auto_reel_ticks = g_auto_reel_ticks;
+        g_status.auto_fish_enabled = g_auto_fish_enabled.load();
+        g_status.auto_fish_state = "";
     }
 
     log_line("FishingCompanion action runtime stopped");
@@ -3342,6 +4601,9 @@ bool Start()
     if (!g_running.compare_exchange_strong(expected, true))
         return true;
 
+    clear_recent_events();
+    remember_event("starting action runtime");
+
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_status = {};
@@ -3351,12 +4613,17 @@ bool Start()
         g_status.diagnostic_snapshots = g_diagnostic_snapshots;
         g_status.auto_reel_enabled = g_auto_reel_enabled;
         g_status.auto_reel_ticks = g_auto_reel_ticks;
+        g_status.auto_fish_enabled = g_auto_fish_enabled.load();
+        g_status.auto_fish_cycles = g_auto_fish_cycles.load();
+        g_status.auto_fish_state = g_auto_fish_enabled.load()
+            ? auto_fish_phase_name(g_auto_fish_phase) : "";
     }
 
     g_thread = CreateThread(nullptr, 0, worker_thread, nullptr, 0, nullptr);
     if (!g_thread) {
         g_running = false;
         set_message("failed to start action runtime");
+        remember_event("failed to start action runtime");
         return false;
     }
 
@@ -3377,6 +4644,10 @@ void Stop()
     if (!was_running)
         return;
 
+    // Make sure neither autonomous loop is left running across a restart.
+    g_auto_fish_enabled.store(false);
+    g_auto_fish_phase = AutoFishPhase::Idle;
+
     std::lock_guard<std::mutex> lock(g_mutex);
     g_queue.clear();
     g_status.queued = 0;
@@ -3387,38 +4658,91 @@ void Stop()
     g_status.diagnostic_snapshots = g_diagnostic_snapshots;
     g_status.auto_reel_enabled = g_auto_reel_enabled;
     g_status.auto_reel_ticks = g_auto_reel_ticks;
+    g_status.auto_fish_enabled = false;
+    g_status.auto_fish_state = "";
 }
 
 void Queue(Command command)
 {
+    bool queued = false;
+    std::string event;
+
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         if (!g_running.load()) {
             g_status.message = "action runtime is not running";
-            return;
+            event = g_status.message;
+        } else {
+            g_queue.push_back(command);
+            g_status.queued = static_cast<unsigned int>(g_queue.size());
+            g_status.message = std::string("queued: ") + command_name(command);
+            g_status.auto_reel_enabled = g_auto_reel_enabled;
+            g_status.auto_reel_ticks = g_auto_reel_ticks;
+            g_status.auto_fish_enabled = g_auto_fish_enabled.load();
+            queued = true;
+            event = g_status.message;
         }
-
-        g_queue.push_back(command);
-        g_status.queued = static_cast<unsigned int>(g_queue.size());
-        g_status.message = std::string("queued: ") + command_name(command);
-        g_status.auto_reel_enabled = g_auto_reel_enabled;
-        g_status.auto_reel_ticks = g_auto_reel_ticks;
     }
 
-    g_cv.notify_one();
+    remember_event(event);
+
+    if (queued)
+        g_cv.notify_one();
 }
 
 Status GetStatus()
 {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    Status copy = g_status;
-    copy.running = g_running.load();
-    copy.queued = static_cast<unsigned int>(g_queue.size());
-    copy.diagnostics_enabled = g_diagnostics_enabled;
-    copy.diagnostic_snapshots = g_diagnostic_snapshots;
-    copy.auto_reel_enabled = g_auto_reel_enabled;
-    copy.auto_reel_ticks = g_auto_reel_ticks;
+    Status copy;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        copy = g_status;
+        copy.running = g_running.load();
+        copy.queued = static_cast<unsigned int>(g_queue.size());
+        copy.diagnostics_enabled = g_diagnostics_enabled;
+        copy.diagnostic_snapshots = g_diagnostic_snapshots;
+        copy.auto_reel_enabled = g_auto_reel_enabled;
+        copy.auto_reel_ticks = g_auto_reel_ticks;
+        copy.auto_fish_enabled = g_auto_fish_enabled.load();
+        copy.auto_fish_cycles = g_auto_fish_cycles.load();
+        copy.auto_fish_state = g_auto_fish_enabled.load()
+            ? auto_fish_phase_name(g_auto_fish_phase) : std::string();
+    }
+
+    copy.recent_events = recent_events_snapshot();
     return copy;
+}
+
+void SetAutoFish(bool enabled)
+{
+    set_auto_fish_enabled(enabled);
+}
+
+bool IsAutoFishEnabled()
+{
+    return g_auto_fish_enabled.load();
+}
+
+AutoFishParams GetAutoFishParams()
+{
+    std::lock_guard<std::mutex> lock(g_auto_fish_params_mutex);
+    return g_auto_fish_params;
+}
+
+void SetAutoFishParams(const AutoFishParams& params)
+{
+    // Clamp defensively so the GUI cannot push nonsensical values into the FSM.
+    AutoFishParams safe = params;
+    if (safe.bite_load_threshold < 0.0f) safe.bite_load_threshold = 0.0f;
+    if (safe.fight_load_danger < safe.bite_load_threshold)
+        safe.fight_load_danger = safe.bite_load_threshold + 0.05f;
+    if (safe.bite_confirm_ms < 0) safe.bite_confirm_ms = 0;
+    if (safe.hook_hold_ms < 0) safe.hook_hold_ms = 0;
+    if (safe.post_cast_wait_ms < 0) safe.post_cast_wait_ms = 0;
+    if (safe.bite_timeout_s < 5) safe.bite_timeout_s = 5;
+    if (safe.cycle_cooldown_ms < 0) safe.cycle_cooldown_ms = 0;
+
+    std::lock_guard<std::mutex> lock(g_auto_fish_params_mutex);
+    g_auto_fish_params = safe;
 }
 
 } // namespace fc::actions

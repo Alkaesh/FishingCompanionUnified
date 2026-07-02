@@ -17,6 +17,10 @@ cmake --preset msvc-x64
 cmake --build --preset release
 ```
 
+Visual Studio 18 / 2026 machines can use `msvc-x64-vs18` and `release-vs18`.
+
+`tools\auto_inject.ps1 -Build` defaults to the VS18 `release-vs18` preset and injects the freshly built local DLL into the selected local target process. Build artifacts stay local and are ignored by git.
+
 Основной результат:
 
 ```text

@@ -1,108 +1,117 @@
 // ============================================================================
-//  DashboardTab.cpp - session overview and HUD toggles.
+//  DashboardTab.cpp - live overview for runtime, SDK, and hotkeys.
 // ============================================================================
 
 #include "DashboardTab.h"
-#include "../../Features/Statistics.h"
+
+#include "../UI.h"
+#include "../../Actions/ActionRuntime.h"
+#include "../../Core/Input.h"
+#include "../../Features/KeyBinder.h"
+#include "../../SDK/ModuleLoader.h"
 
 #include "imgui.h"
 
 #include <cstdio>
+#include <vector>
 
-namespace {
-
-ImVec4 RGBA(unsigned int hex)
-{
-    return ImVec4(
-        ((hex >> 24) & 0xFF) / 255.0f,
-        ((hex >> 16) & 0xFF) / 255.0f,
-        ((hex >> 8)  & 0xFF) / 255.0f,
-        ((hex)       & 0xFF) / 255.0f);
-}
-
-bool BeginCard(const char* id, const ImVec2& size)
-{
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, RGBA(0x172131F5));
-    ImGui::PushStyleColor(ImGuiCol_Border, RGBA(0x2F3D4EFF));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(13.0f, 12.0f));
-
-#if IMGUI_VERSION_NUM >= 19000
-    return ImGui::BeginChild(id, size, ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
-#else
-    return ImGui::BeginChild(id, size, true, ImGuiWindowFlags_AlwaysUseWindowPadding);
-#endif
-}
-
-void EndCard()
-{
-    ImGui::EndChild();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(2);
-}
-
-void MetricCard(const char* id, const char* label, const char* value, const ImVec4& accent, const ImVec2& size)
-{
-    if (BeginCard(id, size))
-    {
-        ImGui::TextColored(RGBA(0x7F91A0FF), "%s", label);
-        ImGui::Spacing();
-        ImGui::TextColored(accent, "%s", value);
-    }
-    EndCard();
-}
-
-} // namespace
+namespace ui = fc::gui::ui;
 
 namespace fc {
 
 void DashboardTab::Render()
 {
-    Statistics& stats = Statistics::Get();
+    const actions::Status runtime = actions::GetStatus();
+    const auto& loader = sdk::ModuleLoader::Get();
+    const std::vector<sdk::ModuleLoader::ModuleRecord> moduleRecords = loader.ModuleRecords();
 
-    ImGui::SeparatorText("Текущая сессия");
+    int loadedModules = 0;
+    int failedModules = 0;
+    for (const sdk::ModuleLoader::ModuleRecord& record : moduleRecords)
+    {
+        if (record.loaded)
+            ++loadedModules;
+        else
+            ++failedModules;
+    }
 
-    char fish[32];
-    char weight[32];
-    char best[32];
-    char time[32];
-    std::snprintf(fish, sizeof(fish), "%d", stats.fishCaught);
-    std::snprintf(weight, sizeof(weight), "%.2f кг", stats.currentWeight);
-    std::snprintf(best, sizeof(best), "%.2f кг", stats.bestCatch);
-    std::snprintf(time, sizeof(time), "%02d:%02d", stats.sessionMinutes / 60, stats.sessionMinutes % 60);
+    char queueValue[32];
+    char moduleValue[32];
+    std::snprintf(queueValue, sizeof(queueValue), "%u queued", runtime.queued);
+    std::snprintf(moduleValue, sizeof(moduleValue), "%d / %d", loadedModules, failedModules);
+
+    ImGui::SeparatorText("Overview");
 
     const float gap = 10.0f;
     const float available = ImGui::GetContentRegionAvail().x;
-    const bool twoColumns = available >= 410.0f;
+    const bool twoColumns = available >= 430.0f;
     const float cardWidth = twoColumns ? (available - gap) * 0.5f : available;
-    const ImVec2 cardSize(cardWidth, 74.0f);
+    const ImVec2 cardSize(cardWidth, 68.0f);
 
-    MetricCard("##fish_card", "Поймано рыбы", fish, RGBA(0x31D3C6FF), cardSize);
-    if (twoColumns) ImGui::SameLine(0.0f, gap);
-    MetricCard("##weight_card", "Текущий вес", weight, RGBA(0xFFCF66FF), cardSize);
-
-    MetricCard("##best_card", "Лучший улов", best, RGBA(0x7FF4EAFF), cardSize);
-    if (twoColumns) ImGui::SameLine(0.0f, gap);
-    MetricCard("##time_card", "Время сессии", time, RGBA(0xFF7A66FF), cardSize);
-
-    ImGui::Spacing();
-    ImGui::SeparatorText("Элементы HUD");
-
-    if (BeginCard("##hud_card", ImVec2(0.0f, 126.0f)))
+    const char* runtimeState = runtime.busy ? "busy" : (runtime.ready ? "ready" : "waiting");
+    if (ui::BeginStatCard("##runtime_card", cardSize))
     {
-        ImGui::Checkbox("Показывать радар", &stats.showRadar);
-        ImGui::Checkbox("Звуковые уведомления", &stats.soundAlerts);
-        ImGui::Checkbox("Показывать счётчик улова", &stats.showCatchCounter);
+        ui::Metric(
+            "Action runtime",
+            runtimeState,
+            runtime.ready ? Color(Palette::Amber) : Color(Palette::Coral));
     }
-    EndCard();
+    ui::EndCard();
+
+    if (twoColumns)
+        ImGui::SameLine(0.0f, gap);
+    if (ui::BeginStatCard("##queue_card", cardSize))
+        ui::Metric("Command queue", queueValue, runtime.queued == 0 ? Color(Palette::TextSoft) : Color(Palette::AmberHi));
+    ui::EndCard();
+
+    if (ui::BeginStatCard("##modules_card", cardSize))
+        ui::Metric("SDK modules loaded / failed", moduleValue, failedModules == 0 ? Color(Palette::Amber) : Color(Palette::Coral));
+    ui::EndCard();
+
+    if (twoColumns)
+        ImGui::SameLine(0.0f, gap);
+    if (ui::BeginStatCard("##diagnostics_card", cardSize))
+    {
+        ui::Metric(
+            "Diagnostics",
+            runtime.diagnostics_enabled ? "enabled" : "off",
+            runtime.diagnostics_enabled ? Color(Palette::Amber) : Color(Palette::TextFaint));
+    }
+    ui::EndCard();
 
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Button, RGBA(0x1C5A62FF));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, RGBA(0x267B82FF));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, RGBA(0x31D3C6FF));
-    if (ImGui::Button("Обновить сейчас", ImVec2(180.0f, 34.0f)))
-        stats.Update();
-    ImGui::PopStyleColor(3);
+    ImGui::SeparatorText("Current State");
+
+    if (ui::BeginCard("##state_card", ImVec2(0.0f, 112.0f)))
+    {
+        ImGui::TextColored(Color(Palette::TextFaint), "Message");
+        ImGui::TextWrapped("%s", runtime.message.empty() ? "No runtime message yet." : runtime.message.c_str());
+
+        if (!runtime.last_command.empty())
+        {
+            ImGui::Spacing();
+            ImGui::TextColored(
+                runtime.last_effect_confirmed ? Color(Palette::Amber) : Color(Palette::AmberHi),
+                "Last command: %s / %s",
+                runtime.last_command.c_str(),
+                runtime.last_result.c_str());
+        }
+    }
+    ui::EndCard();
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Hotkeys");
+
+    if (ui::BeginCard("##hotkeys_card", ImVec2(0.0f, 64.0f)))
+    {
+        ImGui::TextColored(
+            Color(Palette::TextSoft),
+            "Menu: %s    Unload: %s",
+            KeyBinder::KeyName(Input::ToggleKey()),
+            KeyBinder::KeyName(Input::UnloadKey()));
+        ImGui::TextColored(Color(Palette::TextFaint), "Configure these in Settings.");
+    }
+    ui::EndCard();
 }
 
 } // namespace fc

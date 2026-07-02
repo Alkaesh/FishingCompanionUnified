@@ -1,5 +1,5 @@
 // ============================================================================
-//  SettingsTab — «⚙️ Настройки»: горячие клавиши и параметры оверлея.
+//  SettingsTab - hotkeys and overlay appearance.
 // ============================================================================
 
 #pragma once
@@ -11,7 +11,8 @@ namespace fc {
 class SettingsTab : public ITab
 {
 public:
-    const char* Title() const override { return "Настройки"; }
+    const char* Title() const override { return "Settings"; }
+    const char* SearchKeywords() const override { return "settings hotkeys menu unload scale appearance reset"; }
     void Render() override;
 };
 

@@ -1,6 +1,5 @@
 // ============================================================================
-//  ITab — интерфейс вкладки. Любая новая вкладка наследуется отсюда и
-//  регистрируется в Menu. Это и есть точка расширения «плагина».
+//  ITab - menu tab interface.
 // ============================================================================
 
 #pragma once
@@ -12,10 +11,11 @@ class ITab
 public:
     virtual ~ITab() = default;
 
-    // Подпись вкладки (можно с emoji-иконкой, см. стандартные вкладки).
     virtual const char* Title() const = 0;
 
-    // Отрисовка содержимого вкладки (вызывается внутри BeginTabItem/EndTabItem).
+    // Extra words used by the top search box to find this tab.
+    virtual const char* SearchKeywords() const { return ""; }
+
     virtual void Render() = 0;
 };
 

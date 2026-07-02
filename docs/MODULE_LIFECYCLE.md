@@ -41,14 +41,29 @@ A module is marked failed when:
 - the DLL cannot be loaded
 - `FCSDK_ModuleInit` is missing
 - `FCSDK_ModuleInit()` returns `FCSDK_FALSE`
+- `FCSDK_ModuleInit()` raises a structured exception
 
-The SDK tab lists loaded and failed modules.
+The SDK tab lists loaded and failed modules with a detail reason. Use this view first when a module DLL does not appear in the menu.
+
+## Diagnostics UI
+
+Loader diagnostics are kept in memory by `src/SDK/ModuleLoader.*` and rendered by `src/GUI/Tabs/SdkTab.cpp`.
+
+The SDK tab contains:
+
+- `SDK Console`: host version, ABI, ImGui version, loaded/failed totals, and resolved mods path
+- `Loaded Modules`: table of scanned DLLs and the loader decision for each one
+- `Loader Events`: recent scan, load, init, shutdown, and registration warnings
+
+The event log is bounded and newest-first. It is intended for local debugging, not as a persistent audit log.
+UI code reads loader diagnostics as per-frame snapshots, so module tables and events stay stable while load/unload diagnostics are being updated.
 
 ## Unload
 
 During overlay shutdown, the loader removes module-owned tabs, calls optional `FCSDK_ModuleShutdown`, then calls `FreeLibrary` for every loaded module.
 
 If a module owns resources, release them in `FCSDK_ModuleShutdown`. Do not keep ImGui pointers or host callbacks past shutdown.
+Exceptions from `FCSDK_ModuleShutdown` are caught and reported in the loader event log so one bad module does not hide shutdown diagnostics.
 
 ## Scope and Safety
 

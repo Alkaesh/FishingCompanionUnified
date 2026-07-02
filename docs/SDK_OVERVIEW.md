@@ -39,6 +39,27 @@ mods/                   runtime drop-in folder created next to the built DLL
 5. The tab render callback is called inside the host's ImGui frame.
 6. External DLL modules set the host ImGui context before drawing if they compile their own ImGui code.
 
+## Loader Diagnostics
+
+The built-in SDK tab shows the current loader state:
+
+- version, ABI, ImGui version, module totals, and resolved `mods/` directory
+- one row per scanned DLL with `loaded` or `failed` state
+- a detail column with the load result, registered tab count, or failure reason
+- a recent loader event log in newest-first order
+
+`ModuleLoader` records failures for:
+
+- `LoadLibraryW` errors, including the Win32 error code and message
+- missing `FCSDK_ModuleInit`
+- `FCSDK_ModuleInit()` returning `FCSDK_FALSE`
+- structured exceptions raised by `FCSDK_ModuleInit` or optional `FCSDK_ModuleShutdown`
+- invalid `FCSDK_RegisterTab` calls, such as calls outside module init
+
+The public C ABI in `FCSDK.h` is unchanged; diagnostics are host-side only and are exposed through the built-in UI.
+
+The loader exposes diagnostics to UI code as bounded snapshot copies. Do not keep references to loader-owned vectors across frames.
+
 ## Current Version
 
 `0.2.0`

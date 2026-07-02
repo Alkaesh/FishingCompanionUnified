@@ -316,7 +316,6 @@ void Overlay::RenderFrame()
     ApplyPendingMenuVisible();
 
     // TODO: сюда добавьте вызов вашей функции обновления данных, например:
-    //   fc::Statistics::Get().Update();
     // чтобы цифры в дашборде обновлялись каждый кадр.
 
     ImGui_ImplDX11_NewFrame();

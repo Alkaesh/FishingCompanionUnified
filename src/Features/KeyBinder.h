@@ -1,8 +1,8 @@
 // ============================================================================
-//  KeyBinder — переиспользуемый ImGui-компонент назначения горячей клавиши.
+//  KeyBinder - reusable ImGui hotkey assignment control.
 // ----------------------------------------------------------------------------
-//  Использование:  KeyBinder::Draw("Подпись", &myVirtualKey);
-//  Клик по кнопке -> режим ожидания -> следующая нажатая клавиша сохраняется.
+//  Usage: KeyBinder::Draw("Label", &myVirtualKey).
+//  Click the button, press a key, and the virtual-key code is stored.
 // ============================================================================
 
 #pragma once
@@ -12,11 +12,10 @@ namespace fc {
 class KeyBinder
 {
 public:
-    // label — подпись слева; outKey — указатель на хранимый виртуальный код (VK_*).
-    // Возвращает true, если клавиша была изменена в этом кадре.
+    // Returns true when the key changed during this frame.
     static bool Draw(const char* label, int* outKey);
 
-    // Человекочитаемое имя клавиши по её виртуальному коду.
+    // Human-readable name for a virtual-key code.
     static const char* KeyName(int vk);
 };
 

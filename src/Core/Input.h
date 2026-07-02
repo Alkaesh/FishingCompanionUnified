@@ -1,8 +1,8 @@
 // ============================================================================
-//  Input — обработка горячих клавиш модуля (на уровне оконных сообщений).
+//  Input - overlay hotkey handling through the hooked window procedure.
 // ----------------------------------------------------------------------------
-//  Insert — показать/скрыть меню.  End — выгрузить модуль.
-//  Клавиши вынесены в переменные, чтобы Keybinder мог их переназначать.
+//  Insert toggles the menu. End unloads the module.
+//  Keys are stored as variables so KeyBinder can reassign them at runtime.
 // ============================================================================
 
 #pragma once
@@ -14,14 +14,17 @@ namespace fc {
 class Input
 {
 public:
-    // Вызывается из перехваченной оконной процедуры (hkWndProc).
+    // Called from the hooked window procedure.
     static bool HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
 
-    // Текущая клавиша переключения меню (виртуальный код, напр. VK_INSERT).
+    // Current menu toggle virtual-key code.
     static int& ToggleKey();
 
-    // Клавиша выгрузки модуля (по умолчанию VK_END).
+    // Current unload virtual-key code.
     static int& UnloadKey();
+
+    // Current autonomous-fishing (AutoFish) toggle virtual-key code.
+    static int& AutoFishKey();
 };
 
 } // namespace fc

@@ -5,33 +5,49 @@
 #include "Menu.h"
 #include "Tabs/ActionsTab.h"
 #include "Tabs/DashboardTab.h"
-#include "Tabs/TimersTab.h"
+#include "Tabs/HealthTab.h"
+#include "Tabs/LogsTab.h"
 #include "Tabs/SettingsTab.h"
 #include "Tabs/SdkTab.h"
 
+#include "../Actions/ActionRuntime.h"
+#include "../Core/Overlay.h"
+#include "../Features/Settings.h"
+#include "CommandPalette.h"
+#include "UI.h"
 #include "imgui.h"
 
 #include <algorithm>
+#include <cstring>
+
+namespace ui = fc::gui::ui;
 
 namespace {
+
+constexpr float kTopbarHeight = 42.0f;
+constexpr float kTopbarY = 7.0f;
+constexpr float kToolbarY = 8.0f;
+constexpr float kToolbarButtonSize = 28.0f;
+constexpr float kToolbarGap = 6.0f;
+constexpr float kWindowEdgePadding = 10.0f;
+constexpr float kBrandWidth = 92.0f;
+constexpr float kNavStartX = 106.0f;
 
 ImVec2 Add(const ImVec2& a, const ImVec2& b)
 {
     return ImVec2(a.x + b.x, a.y + b.y);
 }
 
+// Thin local aliases over the shared Palette converters so the host shell code
+// reads as before, while the single source of color logic lives in Theme.h.
 ImVec4 RGBA(unsigned int hex)
 {
-    return ImVec4(
-        ((hex >> 24) & 0xFF) / 255.0f,
-        ((hex >> 16) & 0xFF) / 255.0f,
-        ((hex >> 8)  & 0xFF) / 255.0f,
-        ((hex)       & 0xFF) / 255.0f);
+    return fc::Color(hex);
 }
 
 ImU32 U32(unsigned int hex)
 {
-    return ImGui::ColorConvertFloat4ToU32(RGBA(hex));
+    return fc::ColorU32(hex);
 }
 
 ImVec2 GetMaxWindowSize(const ImVec2& minSize)
@@ -53,82 +69,172 @@ const char* GetTabTitle(const fc::ITab& tab)
     return (title && title[0] != '\0') ? title : "Untitled";
 }
 
-bool BeginPaddedChild(const char* id, const ImVec2& size)
+bool BeginPanelChild(const char* id, const ImVec2& size)
 {
 #if IMGUI_VERSION_NUM >= 19000
-    return ImGui::BeginChild(id, size, ImGuiChildFlags_AlwaysUseWindowPadding);
+    return ImGui::BeginChild(id, size, ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
 #else
-    return ImGui::BeginChild(id, size, false, ImGuiWindowFlags_AlwaysUseWindowPadding);
+    return ImGui::BeginChild(id, size, true, ImGuiWindowFlags_AlwaysUseWindowPadding);
 #endif
 }
 
-void DrawHeaderChrome(const ImVec2& windowPos, const ImVec2& windowSize, float rounding)
+void DrawHexMark(ImDrawList* drawList, const ImVec2& center, float radius, ImU32 stroke, ImU32 fill)
+{
+    ImVec2 points[6] = {
+        ImVec2(center.x + radius * 0.86f, center.y - radius * 0.50f),
+        ImVec2(center.x + radius * 0.86f, center.y + radius * 0.50f),
+        ImVec2(center.x, center.y + radius),
+        ImVec2(center.x - radius * 0.86f, center.y + radius * 0.50f),
+        ImVec2(center.x - radius * 0.86f, center.y - radius * 0.50f),
+        ImVec2(center.x, center.y - radius),
+    };
+
+    drawList->AddConvexPolyFilled(points, 6, fill);
+    drawList->AddPolyline(points, 6, stroke, ImDrawFlags_Closed, 1.6f);
+}
+
+void DrawShellChrome(const ImVec2& windowPos, const ImVec2& windowSize, float rounding)
 {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const float headerHeight = 70.0f;
-    const ImVec2 headerMin = windowPos;
-    const ImVec2 headerMax(windowPos.x + windowSize.x, windowPos.y + headerHeight);
-
-    drawList->AddRectFilledMultiColor(
-        headerMin,
-        headerMax,
-        U32(0x111722FF),
-        U32(0x172439FF),
-        U32(0x111722FF),
-        U32(0x0D131DFF));
 
     drawList->AddRectFilled(
-        ImVec2(windowPos.x, windowPos.y + headerHeight - 2.0f),
-        ImVec2(windowPos.x + windowSize.x, windowPos.y + headerHeight),
-        U32(0x31D3C6FF));
+        windowPos,
+        ImVec2(windowPos.x + windowSize.x, windowPos.y + windowSize.y),
+        U32(0x121315FF),
+        rounding);
+
+    drawList->AddRectFilled(
+        windowPos,
+        ImVec2(windowPos.x + windowSize.x, windowPos.y + kTopbarHeight),
+        U32(0x1A1B1EFF),
+        rounding,
+        ImDrawFlags_RoundCornersTop);
+
+    drawList->AddLine(
+        ImVec2(windowPos.x, windowPos.y + kTopbarHeight),
+        ImVec2(windowPos.x + windowSize.x, windowPos.y + kTopbarHeight),
+        U32(0x292A2EFF),
+        1.0f);
 
     drawList->AddRect(
         windowPos,
         ImVec2(windowPos.x + windowSize.x, windowPos.y + windowSize.y),
-        U32(0x2F3D4EFF),
+        U32(0xF0B000CC),
         rounding,
         0,
+        1.2f);
+
+    drawList->AddLine(
+        ImVec2(windowPos.x + 1.0f, windowPos.y + windowSize.y - 2.0f),
+        ImVec2(windowPos.x + windowSize.x - 2.0f, windowPos.y + windowSize.y - 2.0f),
+        U32(0xF0B000FF),
         1.0f);
 }
 
-bool NavItem(int id, const char* label, bool selected, const ImVec2& size)
+void DrawBrand()
+{
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    DrawHexMark(drawList, ImVec2(pos.x + 13.0f, pos.y + 13.0f), 10.0f, U32(0xFFB800FF), U32(0x7A3B1BFF));
+    drawList->AddText(ImVec2(pos.x + 31.0f, pos.y + 5.0f), U32(0xF2C25AFF), "Byster");
+    ImGui::Dummy(ImVec2(kBrandWidth, kToolbarButtonSize));
+}
+
+bool TopTab(int id, const char* label, bool selected, const ImVec2& size)
 {
     ImGui::PushID(id);
-
     const ImVec2 pos = ImGui::GetCursorScreenPos();
-    const bool pressed = ImGui::InvisibleButton("##nav_item", size);
+    const bool pressed = ImGui::InvisibleButton("##top_tab", size);
     const bool hovered = ImGui::IsItemHovered();
     const ImVec2 max = Add(pos, size);
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImU32 bg = selected
-        ? U32(0x1A2838F8)
-        : hovered ? U32(0x172131E8) : U32(0x11192300);
-    const ImU32 text = selected ? U32(0xEAFBFFFF) : hovered ? U32(0xC9D8E2FF) : U32(0x7F91A0FF);
+        ? U32(0x242018F8)
+        : hovered ? U32(0x202124E8) : U32(0x11121400);
+    const ImU32 text = selected ? U32(0xFFD56BFF) : hovered ? U32(0xE6E0D2FF) : U32(0x8D9098FF);
 
     if (selected || hovered)
-        drawList->AddRectFilled(pos, max, bg, 7.0f);
+        drawList->AddRectFilled(pos, max, bg, 2.0f);
 
     if (selected)
     {
         drawList->AddRectFilled(
-            ImVec2(pos.x, pos.y + 8.0f),
-            ImVec2(pos.x + 3.0f, max.y - 8.0f),
-            U32(0x31D3C6FF),
-            2.0f);
-        drawList->AddRect(pos, max, U32(0x31D3C645), 7.0f, 0, 1.0f);
+            ImVec2(pos.x + 4.0f, max.y - 2.0f),
+            ImVec2(max.x - 4.0f, max.y),
+            U32(0xFFB800FF),
+            1.0f);
     }
 
-    drawList->AddText(ImVec2(pos.x + 14.0f, pos.y + 8.0f), text, label);
-
+    DrawHexMark(drawList, ImVec2(pos.x + 14.0f, pos.y + size.y * 0.5f), 5.0f, selected ? U32(0xFFB800FF) : U32(0x5B5E66FF), U32(0x00000000));
+    const ImVec4 textClip(pos.x + 24.0f, pos.y, max.x - 4.0f, max.y);
+    drawList->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        ImVec2(pos.x + 26.0f, pos.y + 7.0f),
+        text,
+        label,
+        nullptr,
+        0.0f,
+        &textClip);
     ImGui::PopID();
     return pressed;
 }
 
-void SectionTitle(const char* title)
+enum class ToolIcon
 {
-    ImGui::TextColored(RGBA(0x31D3C6FF), "%s", title);
-    ImGui::Separator();
+    Collapse,
+    Settings,
+};
+
+void DrawToolIcon(ImDrawList* drawList, ToolIcon icon, const ImVec2& pos, const ImVec2& size, ImU32 color)
+{
+    const ImVec2 center(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f);
+
+    if (icon == ToolIcon::Collapse)
+    {
+        drawList->AddLine(
+            ImVec2(center.x - 4.5f, center.y + 2.0f),
+            ImVec2(center.x, center.y - 3.0f),
+            color,
+            1.7f);
+        drawList->AddLine(
+            ImVec2(center.x, center.y - 3.0f),
+            ImVec2(center.x + 4.5f, center.y + 2.0f),
+            color,
+            1.7f);
+        return;
+    }
+
+    drawList->AddCircle(center, 4.2f, color, 16, 1.5f);
+    drawList->AddLine(ImVec2(center.x - 8.0f, center.y), ImVec2(center.x - 5.8f, center.y), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x + 5.8f, center.y), ImVec2(center.x + 8.0f, center.y), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x, center.y - 8.0f), ImVec2(center.x, center.y - 5.8f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x, center.y + 5.8f), ImVec2(center.x, center.y + 8.0f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x - 5.8f, center.y - 5.8f), ImVec2(center.x - 4.2f, center.y - 4.2f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x + 4.2f, center.y + 4.2f), ImVec2(center.x + 5.8f, center.y + 5.8f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x + 5.8f, center.y - 5.8f), ImVec2(center.x + 4.2f, center.y - 4.2f), color, 1.5f);
+    drawList->AddLine(ImVec2(center.x - 4.2f, center.y + 4.2f), ImVec2(center.x - 5.8f, center.y + 5.8f), color, 1.5f);
+}
+
+bool ToolbarButton(const char* id, ToolIcon icon, const char* tooltip)
+{
+    ImGui::PushID(id);
+    const ImVec2 size(kToolbarButtonSize, kToolbarButtonSize);
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton("##tool", size);
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    drawList->AddRectFilled(pos, Add(pos, size), hovered ? U32(0x2C2D32FF) : U32(0x17181BFF), 2.0f);
+    drawList->AddRect(pos, Add(pos, size), hovered ? U32(0xFFB80088) : U32(0x2A2B30FF), 2.0f, 0, 1.0f);
+    DrawToolIcon(drawList, icon, pos, size, hovered ? U32(0xFFD56BFF) : U32(0xA7ABB3FF));
+
+    if (hovered && tooltip)
+        ImGui::SetTooltip("%s", tooltip);
+
+    ImGui::PopID();
+    return pressed;
 }
 
 } // namespace
@@ -147,13 +253,22 @@ void Menu::RegisterDefaultTabs()
         return;
 
     m_defaultTabsRegistered = true;
-    m_tabs.reserve(m_tabs.size() + 5);
+    m_tabs.reserve(m_tabs.size() + 6);
 
     AddTab(std::make_unique<DashboardTab>());
     AddTab(std::make_unique<ActionsTab>());
-    AddTab(std::make_unique<TimersTab>());
+    AddTab(std::make_unique<LogsTab>());
+    AddTab(std::make_unique<HealthTab>());
     AddTab(std::make_unique<SettingsTab>());
     AddTab(std::make_unique<SdkTab>());
+
+    // Load persistent settings (hotkeys, scale) once, before the first render,
+    // and push them into the live runtime. Seed defaults from Input so the
+    // store and the Settings tab reflect what is actually bound.
+    Settings& settings = Settings::Get();
+    settings.CaptureFromRuntime();
+    settings.LoadAndApply();
+    settings.CaptureFromRuntime();
 }
 
 void Menu::AddTab(std::unique_ptr<ITab> tab, void* owner)
@@ -181,19 +296,48 @@ void Menu::RemoveTabsByOwner(void* owner)
         m_selectedTab = std::clamp(m_selectedTab, 0, static_cast<int>(m_tabs.size()) - 1);
 }
 
+void Menu::JumpToTab(const char* name)
+{
+    if (!name)
+        return;
+
+    for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
+    {
+        ITab* tab = m_tabs[i].tab.get();
+        if (tab && std::strcmp(GetTabTitle(*tab), name) == 0)
+        {
+            m_selectedTab = i;
+            break;
+        }
+    }
+}
+
 void Menu::Render()
 {
     RegisterDefaultTabs();
 
-    const ImVec2 minSize(660.0f, 450.0f);
-    ImGui::SetNextWindowSize(ImVec2(760.0f, 520.0f), ImGuiCond_FirstUseEver);
+    // Keyboard section navigation: arrow left/right cycles tabs. The custom
+    // TopTab uses InvisibleButton and does not capture ImGui's nav, so we drive
+    // it manually. Skip this while the search field is in use - there, arrows
+    // belong to the text cursor / command dropdown.
+    const bool searchActive = m_searchText[0] != '\0';
+    if (!searchActive && !m_tabs.empty() &&
+        (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_RightArrow)))
+    {
+        const int dir = ImGui::IsKeyPressed(ImGuiKey_LeftArrow) ? -1 : 1;
+        const int count = static_cast<int>(m_tabs.size());
+        m_selectedTab = (m_selectedTab + dir + count) % count;
+    }
+
+    const ImVec2 minSize(660.0f, 420.0f);
+    ImGui::SetNextWindowSize(ImVec2(820.0f, 540.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(minSize, GetMaxWindowSize(minSize));
 
     if (const ImGuiViewport* viewport = ImGui::GetMainViewport())
         ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
     const ImGuiWindowFlags flags =
@@ -202,100 +346,130 @@ void Menu::Render()
         ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoScrollWithMouse;
 
-    if (ImGui::Begin("Fishing Companion", nullptr, flags))
+    if (ImGui::Begin("Byster", nullptr, flags))
     {
         const ImVec2 windowPos = ImGui::GetWindowPos();
         const ImVec2 windowSize = ImGui::GetWindowSize();
-        DrawHeaderChrome(windowPos, windowSize, 12.0f);
+        DrawShellChrome(windowPos, windowSize, 6.0f);
 
-        ImGui::SetCursorPos(ImVec2(22.0f, 14.0f));
-        ImGui::TextColored(RGBA(0xF4FBFFFF), "Fishing Companion");
-        ImGui::SetCursorPos(ImVec2(22.0f, 38.0f));
-        ImGui::TextColored(RGBA(0x7F91A0FF), "clean DX11 overlay shell");
+        ImGui::SetCursorPos(ImVec2(12.0f, kTopbarY));
+        DrawBrand();
 
-        const char* status = "LIVE OVERLAY";
-        const ImVec2 statusSize = ImGui::CalcTextSize(status);
-        ImGui::SetCursorPos(ImVec2(windowSize.x - statusSize.x - 42.0f, 24.0f));
-        ImGui::TextColored(RGBA(0xFFCF66FF), "%s", status);
+        const float settingsX = windowSize.x - kWindowEdgePadding - kToolbarButtonSize;
+        const float collapseX = settingsX - kToolbarGap - kToolbarButtonSize;
+        const bool showSearch = windowSize.x >= 760.0f;
+        const float searchWidth = showSearch ? std::clamp(windowSize.x * 0.14f, 108.0f, 160.0f) : 0.0f;
+        const float searchX = collapseX - 8.0f - searchWidth;
+        const float navRight = (showSearch ? searchX : collapseX) - 12.0f;
+
+        if (showSearch)
+        {
+            ImGui::SetCursorPos(ImVec2(searchX, kToolbarY));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, RGBA(0x101114FF));
+            ImGui::PushStyleColor(ImGuiCol_Border, RGBA(0x26272CFF));
+            ImGui::PushStyleColor(ImGuiCol_TextDisabled, RGBA(0x62656DFF));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+            ImGui::SetNextItemWidth(searchWidth);
+            ImGui::InputTextWithHint(
+                "##byster_search",
+                "Search commands",
+                m_searchText.data(),
+                m_searchText.size());
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(3);
+
+            // Esc clears the search field and closes the command dropdown.
+            if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape))
+                m_searchText[0] = '\0';
+        }
+
+        ImGui::SetCursorPos(ImVec2(collapseX, kToolbarY));
+        if (ToolbarButton("collapse_hint", ToolIcon::Collapse, "Hide menu"))
+            Overlay::Get().SetMenuVisible(false);
+
+        ImGui::SetCursorPos(ImVec2(settingsX, kToolbarY));
+        if (ToolbarButton("settings_shortcut", ToolIcon::Settings, "Open Settings"))
+            JumpToTab("Settings");
+
+        // The search field is a global command filter: while it has text, show
+        // an autocomplete dropdown of matching commands and quick navigations.
+        if (showSearch && m_searchText[0] != '\0')
+        {
+            const ImVec2 fieldScreen = Add(windowPos, ImVec2(searchX, kToolbarY + kToolbarButtonSize + 2.0f));
+            const gui::PaletteResult r = gui::RenderCommandPalette(
+                m_searchText.data(), fieldScreen.x, fieldScreen.y, searchWidth, m_paletteSelected);
+
+            if (r.action == gui::PaletteAction::Navigate && r.navTabTitle)
+            {
+                JumpToTab(r.navTabTitle);
+                m_searchText[0] = '\0';
+            }
+            else if (r.action == gui::PaletteAction::RunCommand)
+            {
+                if (r.command == actions::Command::AutoCast)
+                    Overlay::Get().SetMenuVisible(false);
+                actions::Queue(r.command);
+                m_searchText[0] = '\0';
+            }
+        }
+
+        ImGui::SetCursorPos(ImVec2(kNavStartX, kTopbarY));
+        bool drewNavTab = false;
+        for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
+        {
+            ITab* tab = m_tabs[i].tab.get();
+            if (!tab)
+                continue;
+
+            const char* title = GetTabTitle(*tab);
+            const float tabWidth = std::clamp(ImGui::CalcTextSize(title).x + 34.0f, 64.0f, 104.0f);
+            if (ImGui::GetCursorPosX() + tabWidth > navRight)
+                break;
+
+            if (drewNavTab)
+                ImGui::SameLine(0.0f, 2.0f);
+
+            if (TopTab(i, title, i == m_selectedTab, ImVec2(tabWidth, 31.0f)))
+                m_selectedTab = i;
+
+            drewNavTab = true;
+        }
 
         if (m_tabs.empty())
         {
-            ImGui::SetCursorPos(ImVec2(24.0f, 92.0f));
+            ImGui::SetCursorPos(ImVec2(18.0f, 54.0f));
             ImGui::TextDisabled("No tabs registered.");
         }
         else
         {
             m_selectedTab = std::clamp(m_selectedTab, 0, static_cast<int>(m_tabs.size()) - 1);
 
-            const float sidebarWidth = 178.0f;
-            const float headerHeight = 82.0f;
-            const float gap = 12.0f;
-            const float bottomPadding = 16.0f;
-            const ImVec2 navSize(sidebarWidth, windowSize.y - headerHeight - bottomPadding);
-            const ImVec2 contentSize(windowSize.x - sidebarWidth - gap - 28.0f, navSize.y);
-
-            ImGui::SetCursorPos(ImVec2(14.0f, headerHeight));
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, RGBA(0x0D131DF2));
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 12.0f));
-            if (BeginPaddedChild("##fc_nav", navSize))
-            {
-                SectionTitle("Разделы");
-                ImGui::Spacing();
-
-                for (int i = 0; i < static_cast<int>(m_tabs.size()); ++i)
-                {
-                    ITab* tab = m_tabs[i].tab.get();
-                    if (!tab)
-                        continue;
-
-                    if (NavItem(i, GetTabTitle(*tab), i == m_selectedTab, ImVec2(-1.0f, 36.0f)))
-                        m_selectedTab = i;
-
-                    ImGui::Spacing();
-                }
-
-                const float footerY = std::max(ImGui::GetCursorPosY() + 16.0f, ImGui::GetWindowHeight() - 58.0f);
-                ImGui::SetCursorPosY(footerY);
-                ImGui::Separator();
-                ImGui::TextColored(RGBA(0x6F8190FF), "Insert  menu");
-                ImGui::TextColored(RGBA(0x6F8190FF), "End     unload");
-            }
-            ImGui::EndChild();
-            ImGui::PopStyleVar(2);
-            ImGui::PopStyleColor();
-
-            ImGui::SameLine(0.0f, gap);
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, RGBA(0x111923F5));
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
-            if (BeginPaddedChild("##fc_content", contentSize))
+            const ImVec2 contentSize(windowSize.x - 16.0f, windowSize.y - 52.0f);
+            ImGui::SetCursorPos(ImVec2(8.0f, 46.0f));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, RGBA(0x101113FA));
+            ImGui::PushStyleColor(ImGuiCol_Border, RGBA(0x2B2C31FF));
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 3.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+            if (BeginPanelChild("##byster_content", contentSize))
             {
                 ITab* activeTab = m_tabs[m_selectedTab].tab.get();
-                const char* activeTitle = activeTab ? GetTabTitle(*activeTab) : "Untitled";
-
-                ImGui::TextColored(RGBA(0xF4FBFFFF), "%s", activeTitle);
-                ImGui::SameLine();
-                ImGui::TextColored(RGBA(0x6F8190FF), " / tuned skin");
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-
-                if (BeginPaddedChild("##fc_tab_body", ImVec2(0.0f, 0.0f)))
-                {
-                    if (activeTab)
-                        activeTab->Render();
-                }
-                ImGui::EndChild();
+                if (activeTab)
+                    activeTab->Render();
             }
             ImGui::EndChild();
             ImGui::PopStyleVar(2);
-            ImGui::PopStyleColor();
+            ImGui::PopStyleColor(2);
         }
     }
     ImGui::End();
 
     ImGui::PopStyleVar(3);
+
+    // Flush any settings change made this frame (hotkeys, scale) to disk. This
+    // runs every frame on the render thread but is a no-op when the store is
+    // clean, so it stays cheap.
+    Settings::Get().SaveIfDirty();
 }
 
 } // namespace fc

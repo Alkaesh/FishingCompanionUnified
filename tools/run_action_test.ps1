@@ -25,6 +25,20 @@ $latestText = Join-Path $testDir "action_tests_latest.txt"
 $commandPath = Join-Path $GameDir "FishingCompanion_command.txt"
 $actionLogPath = Join-Path $GameDir "FishingCompanion_actions.log"
 $coordPath = Join-Path $GameDir "FishingCompanion_fishing_coords_v4.csv"
+$coordinateTailColumns = @(
+    "coordinate_quality",
+    "lure_position_source",
+    "fish_position_source",
+    "has_fishing_set",
+    "has_fisher",
+    "has_rod",
+    "has_reel",
+    "has_lure",
+    "has_lure_simple",
+    "has_best_lure_pos",
+    "has_closest_fish",
+    "logical_fish_rig"
+)
 
 function Convert-JsonLine($object) {
     return ($object | ConvertTo-Json -Depth 8 -Compress)
@@ -38,10 +52,24 @@ function Get-CanonicalCommand([string]$value) {
         { $_ -in @("autocast") } { return "auto_cast" }
         { $_ -in @("autocatch") } { return "auto_catch" }
         { $_ -in @("autoscout", "scout_cast") } { return "auto_scout" }
+        { $_ -in @("continue", "keep_and_cast", "keep_and_catch") } { return "continue_fishing" }
         { $_ -in @("returntoidle") } { return "return_idle" }
         { $_ -in @("snapshot", "snapshot_diagnostics") } { return "snapshot_diagnostics" }
         default { return $text }
     }
+}
+
+function Get-EffectiveWaitSeconds([string]$canonical, [int]$requested) {
+    $minimum = switch ($canonical) {
+        "manual_roll_boost" { 10; break }
+        "auto_cast" { 14; break }
+        "auto_catch" { 16; break }
+        "auto_scout" { 16; break }
+        "continue_fishing" { 24; break }
+        default { 0 }
+    }
+
+    return [Math]::Max($requested, $minimum)
 }
 
 function Read-LastCsvRow {
@@ -53,6 +81,29 @@ function Read-LastCsvRow {
     $last = Get-Content -LiteralPath $coordPath -Tail 1
     if (-not $header -or -not $last) {
         return $null
+    }
+
+    $headerColumns = @($header -split ",")
+    $lastColumns = @($last -split ",")
+    if ($lastColumns.Count -gt $headerColumns.Count) {
+        $baseHeaderCount = $headerColumns.Count
+        $extraCount = $lastColumns.Count - $baseHeaderCount
+        $tailStart = [Math]::Max(0, $coordinateTailColumns.Count - $extraCount)
+        for ($i = $headerColumns.Count; $i -lt $lastColumns.Count; $i++) {
+            $tailIndex = $i - $baseHeaderCount
+            $tailColumnIndex = $tailStart + $tailIndex
+            if ($tailColumnIndex -lt $coordinateTailColumns.Count) {
+                $columnName = $coordinateTailColumns[$tailColumnIndex]
+            }
+            else {
+                $columnName = "extra_$i"
+            }
+            if ($headerColumns -contains $columnName) {
+                $columnName = "extra_$i"
+            }
+            $headerColumns += $columnName
+        }
+        $header = $headerColumns -join ","
     }
 
     return @($header, $last) | ConvertFrom-Csv
@@ -148,6 +199,25 @@ function Get-NewLogText([long]$offset) {
     }
 }
 
+function Get-FileSnapshot([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) {
+        return [ordered]@{
+            path = $path
+            exists = $false
+            length = 0
+            last_write_time = ""
+        }
+    }
+
+    $item = Get-Item -LiteralPath $path
+    return [ordered]@{
+        path = $path
+        exists = $true
+        length = $item.Length
+        last_write_time = $item.LastWriteTime.ToString("o")
+    }
+}
+
 function Save-Screenshot([string]$runId) {
     $process = $null
     if ($TargetPid -ne 0) {
@@ -240,6 +310,7 @@ if (-not (Test-Path -LiteralPath $GameDir)) {
 }
 
 $canonical = Get-CanonicalCommand $Command
+$effectiveWaitSeconds = Get-EffectiveWaitSeconds $canonical $WaitSeconds
 $runId = "{0}_{1}" -f (Get-Date -Format "yyyyMMdd_HHmmss_fff"), $canonical
 
 Send-FcCommand "snapshot" 700
@@ -247,12 +318,14 @@ $before = Read-LastCsvRow
 $logOffset = Get-LogLength
 
 Send-FcCommand $Command 0
-Start-Sleep -Seconds $WaitSeconds
+Start-Sleep -Seconds $effectiveWaitSeconds
 Send-FcCommand "snapshot" 900
 
 $after = Read-LastCsvRow
 $newLog = Get-NewLogText $logOffset
 $logLines = @($newLog -split "`r?`n" | Where-Object { $_.Trim() })
+$coordSnapshot = Get-FileSnapshot $coordPath
+$actionLogSnapshot = Get-FileSnapshot $actionLogPath
 
 $beforeLure = Get-Point $before "best_lure"
 $afterLure = Get-Point $after "best_lure"
@@ -265,13 +338,30 @@ $flagsBefore = Get-TextValue $before "fishing_set_0x160"
 $flagsAfter = Get-TextValue $after "fishing_set_0x160"
 $logicalBefore = Get-TextValue $before "logical_fish_lure"
 $logicalAfter = Get-TextValue $after "logical_fish_lure"
+$logicalRigBefore = Get-TextValue $before "logical_fish_rig"
+$logicalRigAfter = Get-TextValue $after "logical_fish_rig"
 $closestBefore = Get-TextValue $before "closest_fish"
 $closestAfter = Get-TextValue $after "closest_fish"
+$qualityBefore = Get-TextValue $before "coordinate_quality"
+$qualityAfter = Get-TextValue $after "coordinate_quality"
+$lureSourceBefore = Get-TextValue $before "lure_position_source"
+$lureSourceAfter = Get-TextValue $after "lure_position_source"
+$fishSourceBefore = Get-TextValue $before "fish_position_source"
+$fishSourceAfter = Get-TextValue $after "fish_position_source"
+$beforeTick = Get-TextValue $before "tick_ms"
+$afterTick = Get-TextValue $after "tick_ms"
+$tickChanged = $beforeTick -ne $afterTick
 
 $confirmedByLog = $logLines | Where-Object { $_ -match "^$([regex]::Escape($canonical)):\s+confirmed" } | Select-Object -Last 1
 $failedByLog = $logLines | Where-Object { $_ -match "^$([regex]::Escape($canonical)):\s+failed" } | Select-Object -Last 1
 $calledByLog = $logLines | Where-Object { $_ -match "^$([regex]::Escape($canonical)):\s+called" } | Select-Object -Last 1
 $observedByLog = $logLines | Where-Object { $_ -match "^$([regex]::Escape($canonical)) observed:" } | Select-Object -Last 1
+$snapshotQualityByLog = $logLines | Where-Object { $_ -match "^snapshot_quality\[" } | Select-Object -Last 1
+$lureCandidatesByLog = $logLines | Where-Object { $_ -match "^lure_vector_candidates\[" } | Select-Object -Last 1
+$fishCandidatesByLog = $logLines | Where-Object { $_ -match "^fish_vector_candidates\[" } | Select-Object -Last 1
+$fishScanByLog = $logLines | Where-Object { $_ -match "^fish_scan:" } | Select-Object -Last 1
+$fishPathByLog = $logLines | Where-Object { $_ -match "^fish_path\[" } | Select-Object -Last 1
+$spawnDirectByLog = $logLines | Where-Object { $_ -match "^spawn_fish direct:" } | Select-Object -Last 1
 
 $stateChanged =
     ([Math]::Abs($distanceDelta) -ge 0.05) -or
@@ -279,12 +369,14 @@ $stateChanged =
     ([Math]::Abs($reelDelta) -ge 0.05) -or
     ($flagsBefore -ne $flagsAfter) -or
     ($logicalBefore -ne $logicalAfter) -or
+    ($logicalRigBefore -ne $logicalRigAfter) -or
     ($closestBefore -ne $closestAfter) -or
     ($fishBefore -ne $fishAfter)
 
 $fishResolved =
     ($fishBefore -gt 0 -and $fishAfter -lt $fishBefore) -or
     ($logicalBefore -ne "0x0000000000000000" -and $logicalAfter -eq "0x0000000000000000") -or
+    ($logicalRigBefore -ne "0x0000000000000000" -and $logicalRigAfter -eq "0x0000000000000000") -or
     ($flagsBefore -ne $flagsAfter -and $flagsAfter -match "0800$")
 
 $verdict = "review"
@@ -302,7 +394,7 @@ elseif ($canonical -eq "auto_cast" -and $lureDelta -ge 1.0) {
     $verdict = "pass"
     $reason = "lure moved after cast"
 }
-elseif ($canonical -eq "snapshot_diagnostics" -and (Get-TextValue $before "tick_ms") -ne (Get-TextValue $after "tick_ms")) {
+elseif ($canonical -eq "snapshot_diagnostics" -and $tickChanged) {
     $verdict = "pass"
     $reason = "snapshot updated coordinate CSV"
 }
@@ -341,30 +433,52 @@ $record = [ordered]@{
     time = (Get-Date).ToString("o")
     command = $canonical
     original_command = $Command
-    wait_seconds = $WaitSeconds
+    wait_seconds = $effectiveWaitSeconds
+    requested_wait_seconds = $WaitSeconds
     verdict = $verdict
     reason = $reason
     screenshot = $screenshotPath
+    diagnostics = [ordered]@{
+        command_path = $commandPath
+        coordinate_csv = $coordSnapshot
+        action_log = $actionLogSnapshot
+        has_before_row = $null -ne $before
+        has_after_row = $null -ne $after
+        tick_changed = $tickChanged
+        new_log_line_count = @($logLines).Count
+    }
     before = [ordered]@{
-        tick_ms = Get-TextValue $before "tick_ms"
+        tick_ms = $beforeTick
         reason = Get-TextValue $before "reason"
         fish_count = $fishBefore
         fisher_to_lure = Get-Number $before "fisher_to_lure"
         reel_value = Get-Number $before "reel_value"
         flags_0x160 = $flagsBefore
         logical_fish_lure = $logicalBefore
+        logical_fish_rig = $logicalRigBefore
         closest_fish = $closestBefore
+        coordinate_quality = $qualityBefore
+        lure_position_source = $lureSourceBefore
+        fish_position_source = $fishSourceBefore
+        has_best_lure_pos = Get-IntValue $before "has_best_lure_pos"
+        has_closest_fish = Get-IntValue $before "has_closest_fish"
         best_lure = $beforeLure
     }
     after = [ordered]@{
-        tick_ms = Get-TextValue $after "tick_ms"
+        tick_ms = $afterTick
         reason = Get-TextValue $after "reason"
         fish_count = $fishAfter
         fisher_to_lure = Get-Number $after "fisher_to_lure"
         reel_value = Get-Number $after "reel_value"
         flags_0x160 = $flagsAfter
         logical_fish_lure = $logicalAfter
+        logical_fish_rig = $logicalRigAfter
         closest_fish = $closestAfter
+        coordinate_quality = $qualityAfter
+        lure_position_source = $lureSourceAfter
+        fish_position_source = $fishSourceAfter
+        has_best_lure_pos = Get-IntValue $after "has_best_lure_pos"
+        has_closest_fish = Get-IntValue $after "has_closest_fish"
         best_lure = $afterLure
     }
     metrics = [ordered]@{
@@ -377,6 +491,12 @@ $record = [ordered]@{
     runtime = [ordered]@{
         result_line = [string]$resultLine
         observed_line = [string]$observedByLog
+        snapshot_quality_line = [string]$snapshotQualityByLog
+        lure_candidates_line = [string]$lureCandidatesByLog
+        fish_candidates_line = [string]$fishCandidatesByLog
+        fish_scan_line = [string]$fishScanByLog
+        fish_path_line = [string]$fishPathByLog
+        spawn_direct_line = [string]$spawnDirectByLog
         new_log_tail = @($logLines | Select-Object -Last 20)
     }
 }
@@ -389,15 +509,30 @@ $latest = @(
     "command: $canonical"
     "verdict: $verdict"
     "reason: $reason"
+    "wait_seconds: $effectiveWaitSeconds requested=$WaitSeconds"
+    "tick_ms: $beforeTick -> $afterTick"
     "distance_delta: $($record.metrics.distance_delta)"
     "lure_delta: $($record.metrics.lure_delta)"
     "reel_delta: $($record.metrics.reel_delta)"
     "fish: $fishBefore -> $fishAfter"
     "flags_0x160: $flagsBefore -> $flagsAfter"
+    "quality_csv: $qualityBefore/$lureSourceBefore/$fishSourceBefore -> $qualityAfter/$lureSourceAfter/$fishSourceAfter"
+    "coord_csv: exists=$($record.diagnostics.coordinate_csv.exists) bytes=$($record.diagnostics.coordinate_csv.length) updated=$($record.diagnostics.coordinate_csv.last_write_time)"
+    "action_log: exists=$($record.diagnostics.action_log.exists) bytes=$($record.diagnostics.action_log.length) new_lines=$($record.diagnostics.new_log_line_count)"
+    "quality: $($record.runtime.snapshot_quality_line)"
+    "lure_candidates: $($record.runtime.lure_candidates_line)"
+    "fish_candidates: $($record.runtime.fish_candidates_line)"
+    "fish_scan: $($record.runtime.fish_scan_line)"
+    "fish_path: $($record.runtime.fish_path_line)"
+    "spawn_direct: $($record.runtime.spawn_direct_line)"
     "runtime: $($record.runtime.result_line)"
     "observed: $($record.runtime.observed_line)"
     "jsonl: $TestLog"
 )
+$lastLogLine = $logLines | Select-Object -Last 1
+if ($lastLogLine) {
+    $latest += "log_tail_last: $lastLogLine"
+}
 if ($screenshotPath) {
     $latest += "screenshot: $screenshotPath"
 }
